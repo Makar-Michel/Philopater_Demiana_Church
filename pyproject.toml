@@ -10,8 +10,11 @@ dependencies = [
 
 [tool.flet]
 name = "الراعي"
-product = "الراعي"
+product = "الراعي - كنيسة أبي سيفين والدميانة"
 company = "Philopater Demiana Church"
 
+[tool.flet.app]
+path = "main.py"
+
 [tool.flet.android]
-icon = "src/assets/icon.png"
+icon = "assets/icon.png"
