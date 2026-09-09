@@ -5,6 +5,7 @@ import sqlite3
 import shutil
 from datetime import datetime
 import flet as ft
+from PIL import Image
 
 # =========================================================
 # PATHS & DIRECTORIES
@@ -20,19 +21,29 @@ for folder in [UPLOADS_DIR, BACKUPS_DIR]:
         os.makedirs(folder)
 
 def get_image_path(filename):
-    name_without_ext = os.path.splitext(filename)[0]
+    """البحث الذكي عن الصور سواء كانت ضمن الأصول أو المرفوعات الخاصة بالمعترفين"""
+    if not filename:
+        return ""
+    
+    if os.path.exists(filename):
+        return filename
+
+    name_only = os.path.basename(filename)
+    name_without_ext = os.path.splitext(name_only)[0]
+    
     possible_names = [
-        filename,
-        f"{filename}.jpg",
-        f"{filename}.png",
-        f"{filename}.webp",
+        name_only,
+        f"{name_only}.jpg",
+        f"{name_only}.png",
         f"{name_without_ext}.jpg",
         f"{name_without_ext}.png",
         f"{name_without_ext}.png.jpg",
-        f"{name_without_ext}.webp"
+        f"{name_without_ext}.webp",
+        f"{name_without_ext}.ico"
     ]
     
     search_dirs = [
+        UPLOADS_DIR,
         os.path.join(BASE_DIR, "assets"),
         os.path.join(BASE_DIR, "src", "assets"),
         BASE_DIR
@@ -45,6 +56,19 @@ def get_image_path(filename):
                 return full_p
                 
     return filename
+
+def generate_window_icon():
+    """تحويل صورة أبونا تلقائياً إلى ملف .ico متوافق مع شريط مهام الويندوز"""
+    try:
+        priest_path = get_image_path("church_priest.jpg")
+        if os.path.exists(priest_path):
+            ico_path = os.path.join(BASE_DIR, "assets", "app_icon.ico")
+            img = Image.open(priest_path)
+            img.save(ico_path, format="ICO", sizes=[(256, 256)])
+            return ico_path
+    except Exception as e:
+        print(f"ICO generation error: {e}")
+    return ""
 
 # =========================================================
 # DATABASE & BACKUP LOGIC
@@ -155,6 +179,11 @@ def main(page: ft.Page):
     page.spacing = 0
     page.bgcolor = "#000000"
     page.rtl = True
+
+    # ضبط أيقونة نافذة شريط المهام في الويندوز
+    ico_file = generate_window_icon()
+    if ico_file:
+        page.window.icon = ico_file
 
     file_picker = ft.FilePicker()
     page.services.append(file_picker)
@@ -275,7 +304,7 @@ def main(page: ft.Page):
         search_field = ft.TextField(
             label="بحث عن معترف",
             hint_text="اكتب الاسم",
-            width=280,
+            expand=True,
             prefix_icon=ft.Icons.SEARCH,
             filled=True,
             bgcolor="#121212",
@@ -310,7 +339,7 @@ def main(page: ft.Page):
                 )
             else:
                 for row in rows:
-                    photo_src = row["photo"]
+                    photo_src = get_image_path(row["photo"])
                     if photo_src and os.path.exists(photo_src):
                         image_control = ft.Image(src=photo_src, width=58, height=58, fit=ft.BoxFit.COVER, border_radius=29)
                     else:
@@ -396,7 +425,7 @@ def main(page: ft.Page):
     def add_family_member_ui(family_column, name_val="", rel_val=""):
         member_name = ft.TextField(
             label="اسم فرد الأسرة", 
-            width=210, 
+            expand=True, 
             filled=True,
             bgcolor="#121212", 
             color="#FFFFFF", 
@@ -407,7 +436,7 @@ def main(page: ft.Page):
         )
         relation = ft.TextField(
             label="صلة القرابة", 
-            width=160, 
+            width=140, 
             filled=True,
             bgcolor="#121212", 
             color="#FFFFFF", 
@@ -470,7 +499,7 @@ def main(page: ft.Page):
         last_confession_field = create_styled_textfield("آخر مرة اعترف إمتى؟", hint="01/09/2026", value=edit_data["last_confession"] if edit_data else "")
         notes_field = create_styled_textfield("ملاحظات", multiline=True, min_lines=3, max_lines=6, value=edit_data["notes"] if edit_data else "")
 
-        photo_preview = ft.Image(src=current_photo["value"], width=120, height=120, fit=ft.BoxFit.COVER, border_radius=60, visible=bool(current_photo["value"]))
+        photo_preview = ft.Image(src=get_image_path(current_photo["value"]), width=120, height=120, fit=ft.BoxFit.COVER, border_radius=60, visible=bool(current_photo["value"]))
         photo_placeholder = ft.Container(width=120, height=120, border_radius=60, bgcolor="#121212", border=ft.Border.all(2, "#FFFFFF"), alignment=ft.Alignment(0, 0), visible=not bool(current_photo["value"]), content=ft.Icon(ft.Icons.PERSON_OUTLINE, size=48, color="#FFFFFF"))
 
         async def choose_photo(e):
@@ -592,7 +621,7 @@ def main(page: ft.Page):
 
         page.controls.clear()
 
-        photo_src = row["photo"]
+        photo_src = get_image_path(row["photo"])
         if photo_src and os.path.exists(photo_src):
             profile_image = ft.Image(src=photo_src, width=140, height=140, fit=ft.BoxFit.COVER, border_radius=70)
         else:
@@ -767,14 +796,17 @@ def main(page: ft.Page):
 
         priest_screen = ft.Container(
             expand=True,
+            bgcolor="#000000",
             alignment=ft.Alignment(0, 0),
             content=ft.Image(
                 src=get_image_path("church_priest.jpg"),
-                fit=ft.BoxFit.CONTAIN,
+                fit=ft.BoxFit.COVER,
+                width=float("inf"),
+                height=float("inf"),
             )
         )
 
-        page.add(church_background(priest_screen))
+        page.add(priest_screen)
         page.update()
 
         await asyncio.sleep(3)

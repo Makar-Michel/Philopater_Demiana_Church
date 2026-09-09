@@ -12,6 +12,7 @@ dependencies = [
 name = "راعي الرعاة"
 product = "راعي الرعاة"
 company = "Philopater Demiana Church"
+icon = "assets/church_priest.jpg"
 
 [tool.flet.android]
-icon = "assets/icon.png.jpg"
+icon = "assets/church_priest.jpg"
