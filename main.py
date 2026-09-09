@@ -8,6 +8,14 @@ import shutil
 from datetime import datetime
 import flet as ft
 
+# لاستخدام Google Drive
+try:
+    from pydrive2.auth import GoogleAuth
+    from pydrive2.drive import GoogleDrive
+    PYDRIVE_AVAILABLE = True
+except ImportError:
+    PYDRIVE_AVAILABLE = False
+
 # =========================================================
 # PATHS & DIRECTORIES
 # =========================================================
@@ -22,7 +30,6 @@ for folder in [UPLOADS_DIR, BACKUPS_DIR, ASSETS_DIR]:
     if not os.path.exists(folder):
         os.makedirs(folder)
 
-# دالة مساعدة لتحديد مسار أصول الصور سواء داخل assets أو المجلد الرئيسي
 def get_asset_path(filename):
     asset_p = os.path.join(ASSETS_DIR, filename)
     if os.path.exists(asset_p):
@@ -33,14 +40,13 @@ def get_asset_path(filename):
     return filename
 
 # =========================================================
-# DATABASE & AUTOMATIC BACKUP LOGIC
+# DATABASE & BACKUP LOGIC (LOCAL & GOOGLE DRIVE)
 # =========================================================
 
 def get_db():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn
-
 
 def init_db():
     conn = get_db()
@@ -63,19 +69,16 @@ def init_db():
     conn.commit()
     conn.close()
 
-
 def auto_backup():
-    """إنشاء نسخة احتياطية تلقائية من قاعدة البيانات"""
+    """نسخ احتياطي محلي تلقائي"""
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         backup_file = os.path.join(BACKUPS_DIR, f"auto_backup_{timestamp}.db")
         latest_backup = os.path.join(BACKUPS_DIR, "latest_backup.db")
         
-        # نسخ قاعدة البيانات الحالية
         shutil.copy2(DB_FILE, backup_file)
         shutil.copy2(DB_FILE, latest_backup)
         
-        # الاحتفاظ بأحدث 5 نسخ احتياطية فقط لترشيد المساحة
         all_backups = sorted([os.path.join(BACKUPS_DIR, f) for f in os.listdir(BACKUPS_DIR) if f.startswith("auto_backup_")])
         if len(all_backups) > 5:
             for old_b in all_backups[:-5]:
@@ -85,6 +88,28 @@ def auto_backup():
         print(f"Auto backup error: {e}")
         return None
 
+def backup_to_google_drive():
+    """رفع النسخة الاحتياطية سحابياً إلى Google Drive"""
+    if not PYDRIVE_AVAILABLE or not os.path.exists(DB_FILE):
+        return False
+    try:
+        gauth = GoogleAuth()
+        secrets_file = os.path.join(BASE_DIR, "client_secrets.json")
+        if os.path.exists(secrets_file):
+            gauth.LoadClientConfigFile(secrets_file)
+        gauth.LocalWebserverAuth()
+        drive = GoogleDrive(gauth)
+
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        file_name = f"raei_backup_{timestamp}.db"
+
+        file_drive = drive.CreateFile({'title': file_name})
+        file_drive.SetContentFile(DB_FILE)
+        file_drive.Upload()
+        return True
+    except Exception as e:
+        print(f"Google Drive Backup Error: {e}")
+        return False
 
 def save_confessor(name, birth_date, phone, address, last_confession, has_family, family_members, notes, photo, confessor_id=None):
     conn = get_db()
@@ -110,20 +135,14 @@ def save_confessor(name, birth_date, phone, address, last_confession, has_family
 
     conn.commit()
     conn.close()
-    
-    # تنفيذ النسخ الاحتياطي التلقائي فور الحفظ
     auto_backup()
-
 
 def delete_confessor_db(confessor_id):
     conn = get_db()
     conn.execute("DELETE FROM confessors WHERE id = ?", (confessor_id,))
     conn.commit()
     conn.close()
-    
-    # تنفيذ النسخ الاحتياطي التلقائي فور الحذف
     auto_backup()
-
 
 def get_confessors(search_text=""):
     conn = get_db()
@@ -135,13 +154,11 @@ def get_confessors(search_text=""):
     conn.close()
     return rows
 
-
 def get_confessor(confessor_id):
     conn = get_db()
     row = conn.execute("SELECT * FROM confessors WHERE id = ?", (confessor_id,)).fetchone()
     conn.close()
     return row
-
 
 # =========================================================
 # MAIN APPLICATION
@@ -150,7 +167,7 @@ def get_confessor(confessor_id):
 def main(page: ft.Page):
     init_db()
 
-    page.title = "راعي الرعاة - كنيسة أبي سيفين والدميانة"
+    page.title = "راعي الرعاة"
     page.padding = 0
     page.spacing = 0
     page.bgcolor = "#000000"
@@ -183,15 +200,22 @@ def main(page: ft.Page):
         )
 
     # =====================================================
-    # BACKUP & RESTORE DIALOG/ACTIONS
+    # BACKUP ACTIONS
     # =====================================================
 
     def export_backup_action(e):
         latest = auto_backup()
         if latest and os.path.exists(latest):
-            show_message(f"تم إنشاء النسخة التلقائية بنجاح في مجلد التطبيق:\n{latest}")
+            show_message(f"تم إنشاء النسخة الاحتياطية بنجاح:\n{latest}")
         else:
             show_message("حدث خطأ أثناء إنشاء النسخة الاحتياطية")
+
+    def gdrive_backup_action(e):
+        show_message("جاري الرفع إلى Google Drive...")
+        if backup_to_google_drive():
+            show_message("تم الرفع إلى Google Drive بنجاح!")
+        else:
+            show_message("فشل الرفع سحابياً (تأكد من ملف client_secrets.json وإعدادات المكتبة)")
 
     async def restore_backup_action(e):
         try:
@@ -203,7 +227,7 @@ def main(page: ft.Page):
                     show_message("تمت استعادة البيانات بنجاح!")
                     show_home()
                 else:
-                    show_message("يرجى اختيار ملف قاعدة بيانات صحيح ينتهي بـ .db")
+                    show_message("يرجى اختيار ملف قاعدة بيانات صحيح (.db)")
         except Exception as ex:
             show_message(f"خطأ في الاستعادة: {ex}")
 
@@ -214,7 +238,7 @@ def main(page: ft.Page):
     def show_home(e=None):
         page.controls.clear()
 
-        # إضافة اللوجو في أعلى الرئيسية
+        # إضافة اللوجو
         logo_image = ft.Image(
             src=get_asset_path("icon.png"),
             width=80,
@@ -251,30 +275,31 @@ def main(page: ft.Page):
             ),
         )
 
-        backup_btn = ft.Button("تصدير نسخة احتياطية", icon=ft.Icons.CLOUD_UPLOAD, on_click=export_backup_action)
-        restore_btn = ft.Button("استعادة نسخة احتياطية", icon=ft.Icons.CLOUD_DOWNLOAD, on_click=restore_backup_action)
+        backup_btn = ft.Button("نسخة محليّة", icon=ft.Icons.CLOUD_UPLOAD, on_click=export_backup_action)
+        gdrive_btn = ft.Button("نسخة Google Drive", icon=ft.Icons.ADD_TO_DRIVE, on_click=gdrive_backup_action)
+        restore_btn = ft.Button("استعادة نسخة", icon=ft.Icons.CLOUD_DOWNLOAD, on_click=restore_backup_action)
 
         main_card = ft.Container(
             width=450,
-            padding=30,
+            padding=25,
             border_radius=28,
             bgcolor="#121212",
             border=ft.Border.all(1.5, "#FFFFFF66"),
             content=ft.Column(
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=18,
+                spacing=16,
                 controls=[
                     logo_image,
                     title, 
                     subtitle, 
-                    ft.Container(height=8), 
+                    ft.Container(height=5), 
                     confession_card,
-                    ft.Row(alignment=ft.MainAxisAlignment.CENTER, spacing=10, controls=[backup_btn, restore_btn])
+                    ft.Row(alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=8, controls=[backup_btn, gdrive_btn, restore_btn])
                 ],
             ),
         )
 
-        content = ft.Container(expand=True, alignment=ft.Alignment(0, 0), padding=30, content=main_card)
+        content = ft.Container(expand=True, alignment=ft.Alignment(0, 0), padding=20, content=main_card)
         page.add(church_background(content))
         page.update()
 
@@ -400,26 +425,8 @@ def main(page: ft.Page):
     # =====================================================
 
     def add_family_member_ui(family_column, name_val="", rel_val=""):
-        member_name = ft.TextField(
-            label="اسم فرد الأسرة", 
-            width=210, 
-            bgcolor="#1A1A1A", 
-            color="#FFFFFF", 
-            label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD),
-            border_color="#FFFFFF66", 
-            border_radius=12, 
-            value=name_val
-        )
-        relation = ft.TextField(
-            label="صلة القرابة", 
-            width=160, 
-            bgcolor="#1A1A1A", 
-            color="#FFFFFF", 
-            label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD),
-            border_color="#FFFFFF66", 
-            border_radius=12, 
-            value=rel_val
-        )
+        member_name = ft.TextField(label="اسم فرد الأسرة", width=210, bgcolor="#1A1A1A", color="#FFFFFF", label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), border_color="#FFFFFF66", border_radius=12, value=name_val)
+        relation = ft.TextField(label="صلة القرابة", width=160, bgcolor="#1A1A1A", color="#FFFFFF", label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), border_color="#FFFFFF66", border_radius=12, value=rel_val)
 
         item_ref = {"name_field": member_name, "rel_field": relation}
         family_inputs.append(item_ref)
@@ -527,7 +534,7 @@ def main(page: ft.Page):
                 confessor_id=edit_id,
             )
 
-            show_message("تم حفظ البيانات وإجراء نسخ احتياطي تلقائي بنجاح")
+            show_message("تم حفظ البيانات بنجاح")
             show_confessions()
 
         back_button = ft.Button("رجوع", icon=ft.Icons.ARROW_BACK, on_click=lambda e: show_confessions())
@@ -646,7 +653,7 @@ def main(page: ft.Page):
 
         def confirm_delete(e):
             delete_confessor_db(confessor_id)
-            show_message("تم حذف المعترف وإجراء نسخ احتياطي تلقائي بنجاح")
+            show_message("تم حذف المعترف بنجاح")
             show_confessions()
 
         edit_btn = ft.Button("تعديل البيانات", icon=ft.Icons.EDIT, on_click=lambda e: show_form_confessor(confessor_id))
@@ -708,7 +715,7 @@ def main(page: ft.Page):
         page.update()
 
     # =====================================================
-    # INTRO SCREEN WITH ANIMATION
+    # INTRO SCREEN
     # =====================================================
 
     async def intro():
@@ -725,7 +732,7 @@ def main(page: ft.Page):
                 spacing=15,
                 controls=[
                     ft.Text("✝", size=60, color="#FFFFFF", weight=ft.FontWeight.BOLD),
-                    ft.Text("تطبيق راعي الرعاة", size=28, weight=ft.FontWeight.BOLD, color="#FFFFFF", text_align=ft.TextAlign.CENTER),
+                    ft.Text("راعي الرعاة", size=32, weight=ft.FontWeight.BOLD, color="#FFFFFF", text_align=ft.TextAlign.CENTER),
                     ft.Text("كنيسة الشهيد العظيم أبي سيفين والقديسة دميانة", size=16, weight=ft.FontWeight.BOLD, color="#DDDDDD", text_align=ft.TextAlign.CENTER),
                 ],
             )
@@ -749,13 +756,13 @@ def main(page: ft.Page):
 
         page.controls.clear()
 
-        # إظهار صورة أبونا كاملة دون زوم باستخدام ft.ImageFit.CONTAIN
+        # إظهار صورة أبونا كاملة بدون زوم (ImageFit.CONTAIN)
         priest_screen = ft.Container(
             expand=True,
             alignment=ft.Alignment(0, 0),
             content=ft.Image(
                 src=get_asset_path("church_priest.png"),
-                fit=ft.ImageFit.CONTAIN,  # يضمن ظهور الصورة بالكامل
+                fit=ft.ImageFit.CONTAIN,
             )
         )
 
@@ -767,10 +774,5 @@ def main(page: ft.Page):
         show_home()
 
     page.run_task(intro)
-
-
-# =========================================================
-# RUN APPLICATION
-# =========================================================
 
 ft.app(target=main)
