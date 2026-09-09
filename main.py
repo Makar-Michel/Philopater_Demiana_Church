@@ -14,13 +14,23 @@ import flet as ft
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "church.db")
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 BACKUPS_DIR = os.path.join(BASE_DIR, "backups")
 
-for folder in [UPLOADS_DIR, BACKUPS_DIR]:
+for folder in [UPLOADS_DIR, BACKUPS_DIR, ASSETS_DIR]:
     if not os.path.exists(folder):
         os.makedirs(folder)
 
+# دالة مساعدة لتحديد مسار أصول الصور سواء داخل assets أو المجلد الرئيسي
+def get_asset_path(filename):
+    asset_p = os.path.join(ASSETS_DIR, filename)
+    if os.path.exists(asset_p):
+        return asset_p
+    base_p = os.path.join(BASE_DIR, filename)
+    if os.path.exists(base_p):
+        return base_p
+    return filename
 
 # =========================================================
 # DATABASE & AUTOMATIC BACKUP LOGIC
@@ -55,7 +65,7 @@ def init_db():
 
 
 def auto_backup():
-    """إنشاء نسخة احتياطية تلقائية من قاعدة البيانات والصور"""
+    """إنشاء نسخة احتياطية تلقائية من قاعدة البيانات"""
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         backup_file = os.path.join(BACKUPS_DIR, f"auto_backup_{timestamp}.db")
@@ -140,7 +150,7 @@ def get_confessor(confessor_id):
 def main(page: ft.Page):
     init_db()
 
-    page.title = "كنيسة الشهيد العظيم أبي سيفين والقديسة دميانة"
+    page.title = "راعي الرعاة - كنيسة أبي سيفين والدميانة"
     page.padding = 0
     page.spacing = 0
     page.bgcolor = "#000000"
@@ -162,10 +172,10 @@ def main(page: ft.Page):
             expand=True,
             controls=[
                 ft.Image(
-                    src="church_main.webp",
+                    src=get_asset_path("church_main.webp"),
                     width=float("inf"),
                     height=float("inf"),
-                    fit=ft.BoxFit.COVER,
+                    fit=ft.ImageFit.COVER,
                 ),
                 ft.Container(expand=True, bgcolor="#000000D9"),
                 content,
@@ -204,8 +214,16 @@ def main(page: ft.Page):
     def show_home(e=None):
         page.controls.clear()
 
-        title = ft.Text("كنيسة الشهيد العظيم أبي سيفين والقديسة دميانة", size=24, weight=ft.FontWeight.BOLD, color="#FFFFFF", text_align=ft.TextAlign.CENTER)
-        subtitle = ft.Text("إدارة بيانات الكنيسة", size=15, weight=ft.FontWeight.BOLD, color="#EEEEEE", text_align=ft.TextAlign.CENTER)
+        # إضافة اللوجو في أعلى الرئيسية
+        logo_image = ft.Image(
+            src=get_asset_path("icon.png"),
+            width=80,
+            height=80,
+            fit=ft.ImageFit.CONTAIN
+        )
+
+        title = ft.Text("تطبيق راعي الرعاة", size=26, weight=ft.FontWeight.BOLD, color="#FFFFFF", text_align=ft.TextAlign.CENTER)
+        subtitle = ft.Text("كنيسة الشهيد العظيم أبي سيفين والقديسة دميانة", size=15, weight=ft.FontWeight.BOLD, color="#EEEEEE", text_align=ft.TextAlign.CENTER)
 
         confession_card = ft.Container(
             width=340,
@@ -246,6 +264,7 @@ def main(page: ft.Page):
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=18,
                 controls=[
+                    logo_image,
                     title, 
                     subtitle, 
                     ft.Container(height=8), 
@@ -255,7 +274,7 @@ def main(page: ft.Page):
             ),
         )
 
-        content = ft.Container(expand=True, alignment=ft.Alignment(0.75, 0), padding=30, content=main_card)
+        content = ft.Container(expand=True, alignment=ft.Alignment(0, 0), padding=30, content=main_card)
         page.add(church_background(content))
         page.update()
 
@@ -305,7 +324,7 @@ def main(page: ft.Page):
                 for row in rows:
                     photo_src = row["photo"]
                     if photo_src and os.path.exists(photo_src):
-                        image_control = ft.Image(src=photo_src, width=58, height=58, fit=ft.BoxFit.COVER, border_radius=29)
+                        image_control = ft.Image(src=photo_src, width=58, height=58, fit=ft.ImageFit.COVER, border_radius=29)
                     else:
                         image_control = ft.Container(
                             width=58,
@@ -436,7 +455,7 @@ def main(page: ft.Page):
         last_confession_field = ft.TextField(label="آخر مرة اعترف إمتى؟", hint_text="01/09/2026", width=350, bgcolor="#121212", color="#FFFFFF", label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), border_color="#FFFFFF66", border_radius=14, value=edit_data["last_confession"] if edit_data else "")
         notes_field = ft.TextField(label="ملاحظات", width=350, multiline=True, min_lines=3, max_lines=6, bgcolor="#121212", color="#FFFFFF", label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), border_color="#FFFFFF66", border_radius=14, value=edit_data["notes"] if edit_data else "")
 
-        photo_preview = ft.Image(src=current_photo["value"], width=120, height=120, fit=ft.BoxFit.COVER, border_radius=60, visible=bool(current_photo["value"]))
+        photo_preview = ft.Image(src=current_photo["value"], width=120, height=120, fit=ft.ImageFit.COVER, border_radius=60, visible=bool(current_photo["value"]))
         photo_placeholder = ft.Container(width=120, height=120, border_radius=60, bgcolor="#FFFFFF20", alignment=ft.Alignment(0, 0), visible=not bool(current_photo["value"]), content=ft.Icon(ft.Icons.PERSON_OUTLINE, size=48, color="#FFFFFF"))
 
         async def choose_photo(e):
@@ -558,7 +577,7 @@ def main(page: ft.Page):
 
         photo_src = row["photo"]
         if photo_src and os.path.exists(photo_src):
-            profile_image = ft.Image(src=photo_src, width=140, height=140, fit=ft.BoxFit.COVER, border_radius=70)
+            profile_image = ft.Image(src=photo_src, width=140, height=140, fit=ft.ImageFit.COVER, border_radius=70)
         else:
             profile_image = ft.Container(
                 width=140, 
@@ -706,8 +725,8 @@ def main(page: ft.Page):
                 spacing=15,
                 controls=[
                     ft.Text("✝", size=60, color="#FFFFFF", weight=ft.FontWeight.BOLD),
-                    ft.Text("كنيسة الشهيد العظيم أبي سيفين والقديسة دميانة", size=26, weight=ft.FontWeight.BOLD, color="#FFFFFF", text_align=ft.TextAlign.CENTER),
-                    ft.Text("إدارة بيانات الكنيسة", size=15, weight=ft.FontWeight.BOLD, color="#DDDDDD"),
+                    ft.Text("تطبيق راعي الرعاة", size=28, weight=ft.FontWeight.BOLD, color="#FFFFFF", text_align=ft.TextAlign.CENTER),
+                    ft.Text("كنيسة الشهيد العظيم أبي سيفين والقديسة دميانة", size=16, weight=ft.FontWeight.BOLD, color="#DDDDDD", text_align=ft.TextAlign.CENTER),
                 ],
             )
         )
@@ -730,19 +749,17 @@ def main(page: ft.Page):
 
         page.controls.clear()
 
-        priest_screen = ft.Stack(
+        # إظهار صورة أبونا كاملة دون زوم باستخدام ft.ImageFit.CONTAIN
+        priest_screen = ft.Container(
             expand=True,
-            controls=[
-                ft.Image(
-                    src="church_priest.png",
-                    width=float("inf"),
-                    height=float("inf"),
-                    fit=ft.BoxFit.COVER,
-                ),
-            ],
+            alignment=ft.Alignment(0, 0),
+            content=ft.Image(
+                src=get_asset_path("church_priest.png"),
+                fit=ft.ImageFit.CONTAIN,  # يضمن ظهور الصورة بالكامل
+            )
         )
 
-        page.add(priest_screen)
+        page.add(church_background(priest_screen))
         page.update()
 
         await asyncio.sleep(3)
@@ -756,4 +773,4 @@ def main(page: ft.Page):
 # RUN APPLICATION
 # =========================================================
 
-ft.run(main)
+ft.app(target=main)
