@@ -1,5 +1,5 @@
 [project]
-name = "alraei-church-app"
+name = "alraei"
 version = "0.1.0"
 description = "Philopater Demiana Church Application"
 readme = "README.md"
@@ -10,11 +10,8 @@ dependencies = [
 
 [tool.flet]
 name = "الراعي"
-product = "الراعي - كنيسة أبي سيفين والدميانة"
+product = "الراعي"
 company = "Philopater Demiana Church"
-
-[tool.flet.app]
-path = "src/main.py"
 
 [tool.flet.android]
 icon = "src/assets/icon.png"
