@@ -13,8 +13,5 @@ name = "الراعي"
 product = "الراعي - كنيسة أبي سيفين والدميانة"
 company = "Philopater Demiana Church"
 
-[tool.flet.app]
-path = "main.py"
-
 [tool.flet.android]
 icon = "assets/icon.png"

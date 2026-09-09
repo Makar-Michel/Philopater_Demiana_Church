@@ -34,7 +34,7 @@ jobs:
         run: python -m pip install flet
 
       - name: Build APK
-        run: flet build apk --project src --yes
+        run: flet build apk --project src --module-name main --yes
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
