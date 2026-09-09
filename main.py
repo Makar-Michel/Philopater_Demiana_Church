@@ -12,25 +12,42 @@ import flet as ft
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "church.db")
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 BACKUPS_DIR = os.path.join(BASE_DIR, "backups")
 
-for folder in [UPLOADS_DIR, BACKUPS_DIR, ASSETS_DIR]:
+for folder in [UPLOADS_DIR, BACKUPS_DIR]:
     if not os.path.exists(folder):
         os.makedirs(folder)
 
-def get_asset_path(filename):
-    p1 = os.path.join(BASE_DIR, "assets", filename)
-    if os.path.exists(p1):
-        return f"assets/{filename}"
-    p2 = os.path.join(BASE_DIR, filename)
-    if os.path.exists(p2):
-        return filename
+def get_image_path(filename):
+    name_without_ext = os.path.splitext(filename)[0]
+    possible_names = [
+        filename,
+        f"{filename}.jpg",
+        f"{filename}.png",
+        f"{filename}.webp",
+        f"{name_without_ext}.jpg",
+        f"{name_without_ext}.png",
+        f"{name_without_ext}.png.jpg",
+        f"{name_without_ext}.webp"
+    ]
+    
+    search_dirs = [
+        os.path.join(BASE_DIR, "assets"),
+        os.path.join(BASE_DIR, "src", "assets"),
+        BASE_DIR
+    ]
+    
+    for d in search_dirs:
+        for name in possible_names:
+            full_p = os.path.join(d, name)
+            if os.path.exists(full_p):
+                return full_p
+                
     return filename
 
 # =========================================================
-# DATABASE & LOCAL AUTOMATIC BACKUP LOGIC
+# DATABASE & BACKUP LOGIC
 # =========================================================
 
 def get_db():
@@ -60,7 +77,6 @@ def init_db():
     conn.close()
 
 def auto_backup():
-    """نسخ احتياطي محلي تلقائي"""
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         backup_file = os.path.join(BACKUPS_DIR, f"auto_backup_{timestamp}.db")
@@ -156,19 +172,15 @@ def main(page: ft.Page):
             expand=True,
             controls=[
                 ft.Image(
-                    src=get_asset_path("church_main.webp"),
+                    src=get_image_path("church_main.webp"),
                     width=float("inf"),
                     height=float("inf"),
-                    fit=ft.ImageFit.COVER,
+                    fit=ft.BoxFit.COVER,
                 ),
-                ft.Container(expand=True, bgcolor="#000000D9"),
+                ft.Container(expand=True, bgcolor="#00000033"),
                 content,
             ],
         )
-
-    # =====================================================
-    # BACKUP ACTIONS
-    # =====================================================
 
     def export_backup_action(e):
         latest = auto_backup()
@@ -191,18 +203,14 @@ def main(page: ft.Page):
         except Exception as ex:
             show_message(f"خطأ في الاستعادة: {ex}")
 
-    # =====================================================
-    # HOME
-    # =====================================================
-
     def show_home(e=None):
         page.controls.clear()
 
         logo_image = ft.Image(
-            src=get_asset_path("icon.png"),
+            src=get_image_path("icon.png.jpg"),
             width=80,
             height=80,
-            fit=ft.ImageFit.CONTAIN
+            fit=ft.BoxFit.CONTAIN
         )
 
         title = ft.Text("تطبيق راعي الرعاة", size=26, weight=ft.FontWeight.BOLD, color="#FFFFFF", text_align=ft.TextAlign.CENTER)
@@ -212,8 +220,8 @@ def main(page: ft.Page):
             width=340,
             padding=22,
             border_radius=22,
-            bgcolor="#121212",
-            border=ft.Border.all(1.5, "#FFFFFF66"),
+            bgcolor="#121212EE",
+            border=ft.Border.all(1.5, "#FFFFFF88"),
             ink=True,
             on_click=lambda e: show_confessions(),
             content=ft.Column(
@@ -241,8 +249,8 @@ def main(page: ft.Page):
             width=450,
             padding=25,
             border_radius=28,
-            bgcolor="#121212",
-            border=ft.Border.all(1.5, "#FFFFFF66"),
+            bgcolor="#121212EE",
+            border=ft.Border.all(2, "#FFFFFF"),
             content=ft.Column(
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=16,
@@ -261,22 +269,19 @@ def main(page: ft.Page):
         page.add(church_background(content))
         page.update()
 
-    # =====================================================
-    # CONFESSIONS LIST
-    # =====================================================
-
     def show_confessions(search_value=""):
         page.controls.clear()
 
         search_field = ft.TextField(
             label="بحث عن معترف",
             hint_text="اكتب الاسم",
-            width=330,
+            width=280,
             prefix_icon=ft.Icons.SEARCH,
+            filled=True,
             bgcolor="#121212",
             color="#FFFFFF",
             label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD),
-            border_color="#FFFFFF66",
+            border_color="#FFFFFF",
             border_radius=14,
             value=search_value,
         )
@@ -295,11 +300,11 @@ def main(page: ft.Page):
             if not rows:
                 list_column.controls.append(
                     ft.Container(
-                        padding=35,
+                        padding=25,
                         alignment=ft.Alignment(0, 0),
                         bgcolor="#121212",
                         border_radius=18,
-                        border=ft.Border.all(1.5, "#FFFFFF66"),
+                        border=ft.Border.all(1.5, "#FFFFFF"),
                         content=ft.Text("لا يوجد معترفين حتى الآن", size=16, weight=ft.FontWeight.BOLD, color="#FFFFFF", text_align=ft.TextAlign.CENTER),
                     )
                 )
@@ -307,7 +312,7 @@ def main(page: ft.Page):
                 for row in rows:
                     photo_src = row["photo"]
                     if photo_src and os.path.exists(photo_src):
-                        image_control = ft.Image(src=photo_src, width=58, height=58, fit=ft.ImageFit.COVER, border_radius=29)
+                        image_control = ft.Image(src=photo_src, width=58, height=58, fit=ft.BoxFit.COVER, border_radius=29)
                     else:
                         image_control = ft.Container(
                             width=58,
@@ -324,7 +329,7 @@ def main(page: ft.Page):
                         padding=14,
                         border_radius=18,
                         bgcolor="#121212",
-                        border=ft.Border.all(1.5, "#FFFFFF66"),
+                        border=ft.Border.all(1.5, "#FFFFFF"),
                         ink=True,
                         on_click=lambda e, rid=row["id"]: show_profile(rid),
                         content=ft.Row(
@@ -355,36 +360,62 @@ def main(page: ft.Page):
             padding=ft.Padding(15, 8, 15, 8),
             bgcolor="#121212",
             border_radius=12,
-            border=ft.Border.all(1.5, "#FFFFFF66"),
-            content=ft.Text("الاعترافات", size=24, weight=ft.FontWeight.BOLD, color="#FFFFFF")
+            border=ft.Border.all(1.5, "#FFFFFF"),
+            content=ft.Text("الاعترافات", size=22, weight=ft.FontWeight.BOLD, color="#FFFFFF")
         )
 
-        content = ft.Container(
-            expand=True,
+        confessions_card = ft.Container(
+            width=500,
             padding=20,
+            border_radius=24,
+            bgcolor="#121212EE",
+            border=ft.Border.all(2, "#FFFFFF"),
             content=ft.Column(
                 expand=True,
-                spacing=15,
+                spacing=12,
                 controls=[
                     ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[header_title, back_button]),
                     ft.Row(alignment=ft.MainAxisAlignment.CENTER, controls=[search_field, search_button]),
                     ft.Row(alignment=ft.MainAxisAlignment.CENTER, controls=[add_button]),
-                    ft.Divider(color="#FFFFFF55", height=10),
+                    ft.Divider(color="#FFFFFF88", height=10),
                     list_column,
                 ],
-            ),
+            )
+        )
+
+        content = ft.Container(
+            expand=True,
+            alignment=ft.Alignment(0, 0),
+            padding=20,
+            content=confessions_card
         )
 
         page.add(church_background(content))
         refresh_list()
 
-    # =====================================================
-    # ADD/EDIT CONFESSOR FORM
-    # =====================================================
-
     def add_family_member_ui(family_column, name_val="", rel_val=""):
-        member_name = ft.TextField(label="اسم فرد الأسرة", width=210, bgcolor="#1A1A1A", color="#FFFFFF", label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), border_color="#FFFFFF66", border_radius=12, value=name_val)
-        relation = ft.TextField(label="صلة القرابة", width=160, bgcolor="#1A1A1A", color="#FFFFFF", label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), border_color="#FFFFFF66", border_radius=12, value=rel_val)
+        member_name = ft.TextField(
+            label="اسم فرد الأسرة", 
+            width=210, 
+            filled=True,
+            bgcolor="#121212", 
+            color="#FFFFFF", 
+            label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), 
+            border_color="#FFFFFF", 
+            border_radius=12, 
+            value=name_val
+        )
+        relation = ft.TextField(
+            label="صلة القرابة", 
+            width=160, 
+            filled=True,
+            bgcolor="#121212", 
+            color="#FFFFFF", 
+            label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), 
+            border_color="#FFFFFF", 
+            border_radius=12, 
+            value=rel_val
+        )
 
         item_ref = {"name_field": member_name, "rel_field": relation}
         family_inputs.append(item_ref)
@@ -399,7 +430,7 @@ def main(page: ft.Page):
             padding=8,
             border_radius=14,
             bgcolor="#121212",
-            border=ft.Border.all(1, "#FFFFFF44"),
+            border=ft.Border.all(1, "#FFFFFF"),
             content=ft.Row(wrap=True, controls=[member_name, relation, ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, icon_color="#FFFFFF", on_click=delete_member)]),
         )
 
@@ -413,15 +444,34 @@ def main(page: ft.Page):
         edit_data = get_confessor(edit_id) if edit_id else None
         current_photo["value"] = edit_data["photo"] if edit_data else ""
 
-        name_field = ft.TextField(label="الاسم *", width=350, bgcolor="#121212", color="#FFFFFF", label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), border_color="#FFFFFF66", border_radius=14, value=edit_data["name"] if edit_data else "")
-        birth_field = ft.TextField(label="تاريخ الميلاد / السن", hint_text="15/08/1985", width=350, bgcolor="#121212", color="#FFFFFF", label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), border_color="#FFFFFF66", border_radius=14, value=edit_data["birth_date"] if edit_data else "")
-        phone_field = ft.TextField(label="رقم الهاتف", width=350, keyboard_type=ft.KeyboardType.PHONE, bgcolor="#121212", color="#FFFFFF", label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), border_color="#FFFFFF66", border_radius=14, value=edit_data["phone"] if edit_data else "")
-        address_field = ft.TextField(label="العنوان", width=350, multiline=True, min_lines=2, max_lines=4, bgcolor="#121212", color="#FFFFFF", label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), border_color="#FFFFFF66", border_radius=14, value=edit_data["address"] if edit_data else "")
-        last_confession_field = ft.TextField(label="آخر مرة اعترف إمتى؟", hint_text="01/09/2026", width=350, bgcolor="#121212", color="#FFFFFF", label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), border_color="#FFFFFF66", border_radius=14, value=edit_data["last_confession"] if edit_data else "")
-        notes_field = ft.TextField(label="ملاحظات", width=350, multiline=True, min_lines=3, max_lines=6, bgcolor="#121212", color="#FFFFFF", label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), border_color="#FFFFFF66", border_radius=14, value=edit_data["notes"] if edit_data else "")
+        def create_styled_textfield(label, hint="", multiline=False, min_lines=1, max_lines=1, keyboard_type=ft.KeyboardType.TEXT, value=""):
+            return ft.TextField(
+                label=label,
+                hint_text=hint,
+                width=380,
+                multiline=multiline,
+                min_lines=min_lines,
+                max_lines=max_lines,
+                keyboard_type=keyboard_type,
+                filled=True,
+                bgcolor="#121212",
+                color="#FFFFFF",
+                hint_style=ft.TextStyle(color="#AAAAAA"),
+                label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD),
+                border_color="#FFFFFF",
+                border_radius=14,
+                value=value
+            )
 
-        photo_preview = ft.Image(src=current_photo["value"], width=120, height=120, fit=ft.ImageFit.COVER, border_radius=60, visible=bool(current_photo["value"]))
-        photo_placeholder = ft.Container(width=120, height=120, border_radius=60, bgcolor="#FFFFFF20", alignment=ft.Alignment(0, 0), visible=not bool(current_photo["value"]), content=ft.Icon(ft.Icons.PERSON_OUTLINE, size=48, color="#FFFFFF"))
+        name_field = create_styled_textfield("الاسم *", value=edit_data["name"] if edit_data else "")
+        birth_field = create_styled_textfield("تاريخ الميلاد / السن", hint="15/08/1985", value=edit_data["birth_date"] if edit_data else "")
+        phone_field = create_styled_textfield("رقم الهاتف", keyboard_type=ft.KeyboardType.PHONE, value=edit_data["phone"] if edit_data else "")
+        address_field = create_styled_textfield("العنوان", multiline=True, min_lines=2, max_lines=4, value=edit_data["address"] if edit_data else "")
+        last_confession_field = create_styled_textfield("آخر مرة اعترف إمتى؟", hint="01/09/2026", value=edit_data["last_confession"] if edit_data else "")
+        notes_field = create_styled_textfield("ملاحظات", multiline=True, min_lines=3, max_lines=6, value=edit_data["notes"] if edit_data else "")
+
+        photo_preview = ft.Image(src=current_photo["value"], width=120, height=120, fit=ft.BoxFit.COVER, border_radius=60, visible=bool(current_photo["value"]))
+        photo_placeholder = ft.Container(width=120, height=120, border_radius=60, bgcolor="#121212", border=ft.Border.all(2, "#FFFFFF"), alignment=ft.Alignment(0, 0), visible=not bool(current_photo["value"]), content=ft.Icon(ft.Icons.PERSON_OUTLINE, size=48, color="#FFFFFF"))
 
         async def choose_photo(e):
             try:
@@ -455,7 +505,7 @@ def main(page: ft.Page):
             page.update()
 
         family_switch.on_change = family_changed
-        family_section = ft.Container(width=380, padding=15, border_radius=18, bgcolor="#121212", border=ft.Border.all(1.5, "#FFFFFF66"), content=ft.Column(spacing=10, controls=[family_switch, family_column, add_family_button]))
+        family_section = ft.Container(width=380, padding=15, border_radius=18, bgcolor="#121212", border=ft.Border.all(1.5, "#FFFFFF"), content=ft.Column(spacing=10, controls=[family_switch, family_column, add_family_button]))
 
         if edit_data and edit_data["has_family"]:
             try:
@@ -502,35 +552,37 @@ def main(page: ft.Page):
             padding=ft.Padding(15, 8, 15, 8),
             bgcolor="#121212",
             border_radius=12,
-            border=ft.Border.all(1.5, "#FFFFFF66"),
-            content=ft.Text("تعديل / إنشاء معترف", size=24, weight=ft.FontWeight.BOLD, color="#FFFFFF")
+            border=ft.Border.all(1.5, "#FFFFFF"),
+            content=ft.Text("تعديل / إنشاء معترف", size=22, weight=ft.FontWeight.BOLD, color="#FFFFFF")
         )
 
-        form = ft.Column(
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            spacing=14,
-            scroll=ft.ScrollMode.AUTO,
-            controls=[
-                ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[form_title, back_button]),
-                photo_area,
-                name_field,
-                birth_field,
-                phone_field,
-                address_field,
-                last_confession_field,
-                family_section,
-                notes_field,
-                save_button,
-                ft.Container(height=30),
-            ],
+        form_card = ft.Container(
+            width=480,
+            padding=20,
+            border_radius=24,
+            bgcolor="#121212EE",
+            border=ft.Border.all(2, "#FFFFFF"),
+            content=ft.Column(
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=14,
+                scroll=ft.ScrollMode.AUTO,
+                controls=[
+                    ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[form_title, back_button]),
+                    photo_area,
+                    name_field,
+                    birth_field,
+                    phone_field,
+                    address_field,
+                    last_confession_field,
+                    family_section,
+                    notes_field,
+                    save_button,
+                ],
+            )
         )
 
-        page.add(church_background(ft.Container(expand=True, padding=20, content=form)))
+        page.add(church_background(ft.Container(expand=True, alignment=ft.Alignment(0, 0), padding=20, content=form_card)))
         page.update()
-
-    # =====================================================
-    # PROFILE VIEW
-    # =====================================================
 
     def show_profile(confessor_id):
         row = get_confessor(confessor_id)
@@ -542,13 +594,14 @@ def main(page: ft.Page):
 
         photo_src = row["photo"]
         if photo_src and os.path.exists(photo_src):
-            profile_image = ft.Image(src=photo_src, width=140, height=140, fit=ft.ImageFit.COVER, border_radius=70)
+            profile_image = ft.Image(src=photo_src, width=140, height=140, fit=ft.BoxFit.COVER, border_radius=70)
         else:
             profile_image = ft.Container(
                 width=140, 
                 height=140, 
                 border_radius=70, 
-                bgcolor="#FFFFFF20", 
+                bgcolor="#121212", 
+                border=ft.Border.all(2, "#FFFFFF"),
                 alignment=ft.Alignment(0, 0), 
                 content=ft.Icon(ft.Icons.PERSON_OUTLINE, size=60, color="#FFFFFF")
             )
@@ -558,7 +611,7 @@ def main(page: ft.Page):
                 padding=14,
                 border_radius=14,
                 bgcolor="#121212",
-                border=ft.Border.all(1.5, "#FFFFFF66"),
+                border=ft.Border.all(1.5, "#FFFFFF"),
                 content=ft.Row(
                     controls=[
                         ft.Icon(icon, size=24, color="#FFFFFF"),
@@ -587,8 +640,8 @@ def main(page: ft.Page):
                         ft.Container(
                             padding=10,
                             border_radius=12,
-                            bgcolor="#1A1A1A",
-                            border=ft.Border.all(1, "#FFFFFF44"),
+                            bgcolor="#121212",
+                            border=ft.Border.all(1, "#FFFFFF"),
                             content=ft.Row(
                                 controls=[
                                     ft.Icon(ft.Icons.PERSON_OUTLINE, size=22, color="#FFFFFF"),
@@ -622,24 +675,27 @@ def main(page: ft.Page):
             padding=ft.Padding(15, 8, 15, 8),
             bgcolor="#121212",
             border_radius=12,
-            border=ft.Border.all(1.5, "#FFFFFF66"),
-            content=ft.Text("بيانات المعترف", size=24, weight=ft.FontWeight.BOLD, color="#FFFFFF")
+            border=ft.Border.all(1.5, "#FFFFFF"),
+            content=ft.Text("بيانات المعترف", size=22, weight=ft.FontWeight.BOLD, color="#FFFFFF")
         )
 
         name_card = ft.Container(
             padding=ft.Padding(20, 10, 20, 10),
             bgcolor="#121212",
             border_radius=14,
-            border=ft.Border.all(1.5, "#FFFFFF66"),
-            content=ft.Text(row["name"], size=26, weight=ft.FontWeight.BOLD, color="#FFFFFF", text_align=ft.TextAlign.CENTER)
+            border=ft.Border.all(1.5, "#FFFFFF"),
+            content=ft.Text(row["name"], size=24, weight=ft.FontWeight.BOLD, color="#FFFFFF", text_align=ft.TextAlign.CENTER)
         )
 
-        content = ft.Container(
-            expand=True,
+        profile_card = ft.Container(
+            width=480,
             padding=20,
+            border_radius=24,
+            bgcolor="#121212EE",
+            border=ft.Border.all(2, "#FFFFFF"),
             content=ft.Column(
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=15,
+                spacing=14,
                 scroll=ft.ScrollMode.AUTO,
                 controls=[
                     ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[profile_title, back_button]),
@@ -650,31 +706,26 @@ def main(page: ft.Page):
                     info_row(ft.Icons.PHONE_OUTLINED, "رقم الهاتف", row["phone"]),
                     info_row(ft.Icons.LOCATION_ON_OUTLINED, "العنوان", row["address"]),
                     info_row(ft.Icons.EVENT_OUTLINED, "آخر مرة اعترف", row["last_confession"]),
-                    ft.Container(padding=15, border_radius=18, bgcolor="#121212", border=ft.Border.all(1.5, "#FFFFFF66"), content=ft.Column(spacing=8, controls=family_controls)),
+                    ft.Container(padding=15, border_radius=18, bgcolor="#121212", border=ft.Border.all(1.5, "#FFFFFF"), content=ft.Column(spacing=8, controls=family_controls)),
                     ft.Container(
                         padding=15, 
                         border_radius=18, 
                         bgcolor="#121212", 
-                        border=ft.Border.all(1.5, "#FFFFFF66"),
+                        border=ft.Border.all(1.5, "#FFFFFF"),
                         content=ft.Column(
                             spacing=6, 
                             controls=[
-                                ft.Text("ملاحظات", size=19, weight=ft.FontWeight.BOLD, color="#FFFFFF"), 
+                                ft.Text("ملاحظات", size=18, weight=ft.FontWeight.BOLD, color="#FFFFFF"), 
                                 ft.Text(row["notes"] or "لا توجد ملاحظات", size=15, weight=ft.FontWeight.BOLD, color="#EEEEEE")
                             ]
                         )
                     ),
-                    ft.Container(height=30),
                 ],
-            ),
+            )
         )
 
-        page.add(church_background(content))
+        page.add(church_background(ft.Container(expand=True, alignment=ft.Alignment(0, 0), padding=20, content=profile_card)))
         page.update()
-
-    # =====================================================
-    # INTRO SCREEN
-    # =====================================================
 
     async def intro():
         page.controls.clear()
@@ -714,13 +765,12 @@ def main(page: ft.Page):
 
         page.controls.clear()
 
-        # إظهار صورة أبونا كاملة دون زوم (ft.ImageFit.CONTAIN)
         priest_screen = ft.Container(
             expand=True,
             alignment=ft.Alignment(0, 0),
             content=ft.Image(
-                src=get_asset_path("church_priest.png"),
-                fit=ft.ImageFit.CONTAIN,
+                src=get_image_path("church_priest.jpg"),
+                fit=ft.BoxFit.CONTAIN,
             )
         )
 
@@ -733,4 +783,4 @@ def main(page: ft.Page):
 
     page.run_task(intro)
 
-ft.app(target=main)
+ft.run(main)
