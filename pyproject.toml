@@ -6,13 +6,12 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "flet>=0.28.1",
-    "pydrive2",
 ]
 
 [tool.flet]
 name = "راعي الرعاة"
-product = "راعي الرعاة - كنيسة أبي سيفين والدميانة"
+product = "راعي الرعاة"
 company = "Philopater Demiana Church"
 
 [tool.flet.android]
-icon = "src/assets/icon.png"
+icon = "assets/icon.png"

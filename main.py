@@ -1,20 +1,10 @@
 import asyncio
-import base64
 import json
-import mimetypes
 import os
 import sqlite3
 import shutil
 from datetime import datetime
 import flet as ft
-
-# لاستخدام Google Drive
-try:
-    from pydrive2.auth import GoogleAuth
-    from pydrive2.drive import GoogleDrive
-    PYDRIVE_AVAILABLE = True
-except ImportError:
-    PYDRIVE_AVAILABLE = False
 
 # =========================================================
 # PATHS & DIRECTORIES
@@ -31,16 +21,16 @@ for folder in [UPLOADS_DIR, BACKUPS_DIR, ASSETS_DIR]:
         os.makedirs(folder)
 
 def get_asset_path(filename):
-    asset_p = os.path.join(ASSETS_DIR, filename)
-    if os.path.exists(asset_p):
-        return asset_p
-    base_p = os.path.join(BASE_DIR, filename)
-    if os.path.exists(base_p):
-        return base_p
+    p1 = os.path.join(BASE_DIR, "assets", filename)
+    if os.path.exists(p1):
+        return f"assets/{filename}"
+    p2 = os.path.join(BASE_DIR, filename)
+    if os.path.exists(p2):
+        return filename
     return filename
 
 # =========================================================
-# DATABASE & BACKUP LOGIC (LOCAL & GOOGLE DRIVE)
+# DATABASE & LOCAL AUTOMATIC BACKUP LOGIC
 # =========================================================
 
 def get_db():
@@ -87,29 +77,6 @@ def auto_backup():
     except Exception as e:
         print(f"Auto backup error: {e}")
         return None
-
-def backup_to_google_drive():
-    """رفع النسخة الاحتياطية سحابياً إلى Google Drive"""
-    if not PYDRIVE_AVAILABLE or not os.path.exists(DB_FILE):
-        return False
-    try:
-        gauth = GoogleAuth()
-        secrets_file = os.path.join(BASE_DIR, "client_secrets.json")
-        if os.path.exists(secrets_file):
-            gauth.LoadClientConfigFile(secrets_file)
-        gauth.LocalWebserverAuth()
-        drive = GoogleDrive(gauth)
-
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        file_name = f"raei_backup_{timestamp}.db"
-
-        file_drive = drive.CreateFile({'title': file_name})
-        file_drive.SetContentFile(DB_FILE)
-        file_drive.Upload()
-        return True
-    except Exception as e:
-        print(f"Google Drive Backup Error: {e}")
-        return False
 
 def save_confessor(name, birth_date, phone, address, last_confession, has_family, family_members, notes, photo, confessor_id=None):
     conn = get_db()
@@ -210,13 +177,6 @@ def main(page: ft.Page):
         else:
             show_message("حدث خطأ أثناء إنشاء النسخة الاحتياطية")
 
-    def gdrive_backup_action(e):
-        show_message("جاري الرفع إلى Google Drive...")
-        if backup_to_google_drive():
-            show_message("تم الرفع إلى Google Drive بنجاح!")
-        else:
-            show_message("فشل الرفع سحابياً (تأكد من ملف client_secrets.json وإعدادات المكتبة)")
-
     async def restore_backup_action(e):
         try:
             files = await file_picker.pick_files(allow_multiple=False, dialog_title="اختر ملف النسخة الاحتياطية (.db)")
@@ -238,7 +198,6 @@ def main(page: ft.Page):
     def show_home(e=None):
         page.controls.clear()
 
-        # إضافة اللوجو
         logo_image = ft.Image(
             src=get_asset_path("icon.png"),
             width=80,
@@ -276,7 +235,6 @@ def main(page: ft.Page):
         )
 
         backup_btn = ft.Button("نسخة محليّة", icon=ft.Icons.CLOUD_UPLOAD, on_click=export_backup_action)
-        gdrive_btn = ft.Button("نسخة Google Drive", icon=ft.Icons.ADD_TO_DRIVE, on_click=gdrive_backup_action)
         restore_btn = ft.Button("استعادة نسخة", icon=ft.Icons.CLOUD_DOWNLOAD, on_click=restore_backup_action)
 
         main_card = ft.Container(
@@ -294,7 +252,7 @@ def main(page: ft.Page):
                     subtitle, 
                     ft.Container(height=5), 
                     confession_card,
-                    ft.Row(alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=8, controls=[backup_btn, gdrive_btn, restore_btn])
+                    ft.Row(alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=8, controls=[backup_btn, restore_btn])
                 ],
             ),
         )
@@ -756,7 +714,7 @@ def main(page: ft.Page):
 
         page.controls.clear()
 
-        # إظهار صورة أبونا كاملة بدون زوم (ImageFit.CONTAIN)
+        # إظهار صورة أبونا كاملة دون زوم (ft.ImageFit.CONTAIN)
         priest_screen = ft.Container(
             expand=True,
             alignment=ft.Alignment(0, 0),
