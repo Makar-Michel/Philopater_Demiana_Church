@@ -14,7 +14,7 @@ product = "راعي الرعاة"
 company = "Philopater Demiana Church"
 
 [tool.flet.app]
-icon = "assets/church_priest.jpg"
+icon = "assets/icon.png"
 
 [tool.flet.android]
-icon = "assets/church_priest.jpg"
+icon = "assets/icon.png"
