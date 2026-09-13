@@ -14,18 +14,21 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "church.db")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 BACKUPS_DIR = os.path.join(BASE_DIR, "backups")
+
 for folder in [UPLOADS_DIR, BACKUPS_DIR]:
     if not os.path.exists(folder):
         os.makedirs(folder)
 
 def get_image_path(filename):
-    """البحث الذكي عن الصور سواء كانت ضمن الأصول أو المرفوعات الخاصة بالمعترفين"""
+    """البحث الذكي والإصلاح التلقائي لمسارات الصور على الأندرويد والكمبيوتر"""
     if not filename:
         return ""
     
+    # إذا كانت الصورة موجودة بنفس المسار تماماً
     if os.path.exists(filename):
         return filename
 
+    # استخراج اسم الملف فقط للبحث عنه في مجلدات الأصول أو المرفوعات
     name_only = os.path.basename(filename)
     name_without_ext = os.path.splitext(name_only)[0]
     
@@ -106,6 +109,9 @@ def save_confessor(name, birth_date, phone, address, last_confession, has_family
     conn = get_db()
     family_json = json.dumps(family_members, ensure_ascii=False)
     
+    # حفظ اسم الملف فقط وليس المسار المطلق لضمان عمل الصورة على أي جهاز أو موبايل
+    clean_photo_path = os.path.basename(photo) if photo else ""
+    
     if confessor_id:
         conn.execute(
             """
@@ -113,7 +119,7 @@ def save_confessor(name, birth_date, phone, address, last_confession, has_family
             SET name=?, birth_date=?, phone=?, address=?, last_confession=?, has_family=?, family_json=?, notes=?, photo=?
             WHERE id=?
             """,
-            (name, birth_date, phone, address, last_confession, 1 if has_family else 0, family_json, notes, photo, confessor_id)
+            (name, birth_date, phone, address, last_confession, 1 if has_family else 0, family_json, notes, clean_photo_path, confessor_id)
         )
     else:
         conn.execute(
@@ -121,7 +127,7 @@ def save_confessor(name, birth_date, phone, address, last_confession, has_family
             INSERT INTO confessors (name, birth_date, phone, address, last_confession, has_family, family_json, notes, photo)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (name, birth_date, phone, address, last_confession, 1 if has_family else 0, family_json, notes, photo)
+            (name, birth_date, phone, address, last_confession, 1 if has_family else 0, family_json, notes, clean_photo_path)
         )
 
     conn.commit()
@@ -488,12 +494,13 @@ def main(page: ft.Page):
                     return
 
                 selected_file = files[0]
-                save_path = os.path.join(UPLOADS_DIR, f"photo_{os.urandom(4).hex()}_{selected_file.name}")
+                save_filename = f"photo_{os.urandom(4).hex()}_{selected_file.name}"
+                save_path = os.path.join(UPLOADS_DIR, save_filename)
                 with open(save_path, "wb") as f:
                     f.write(selected_file.bytes)
 
-                current_photo["value"] = save_path
-                photo_preview.src = save_path
+                current_photo["value"] = save_filename
+                photo_preview.src = get_image_path(save_filename)
                 photo_preview.visible = True
                 photo_placeholder.visible = False
                 page.update()
@@ -773,13 +780,14 @@ def main(page: ft.Page):
 
         page.controls.clear()
 
+        # ضبط صورة أبونا لعرضها كاملة بدون زووم أو قص
         priest_screen = ft.Container(
             expand=True,
             bgcolor="#000000",
             alignment=ft.Alignment(0, 0),
             content=ft.Image(
                 src=get_image_path("church_priest.jpg"),
-                fit=ft.BoxFit.COVER,
+                fit=ft.BoxFit.CONTAIN,
                 width=float("inf"),
                 height=float("inf"),
             )
