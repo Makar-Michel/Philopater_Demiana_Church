@@ -5,7 +5,6 @@ import sqlite3
 import shutil
 from datetime import datetime
 import flet as ft
-from PIL import Image
 
 # =========================================================
 # PATHS & DIRECTORIES
@@ -38,8 +37,7 @@ def get_image_path(filename):
         f"{name_without_ext}.jpg",
         f"{name_without_ext}.png",
         f"{name_without_ext}.png.jpg",
-        f"{name_without_ext}.webp",
-        f"{name_without_ext}.ico"
+        f"{name_without_ext}.webp"
     ]
     
     search_dirs = [
@@ -56,19 +54,6 @@ def get_image_path(filename):
                 return full_p
                 
     return filename
-
-def generate_window_icon():
-    """تحويل صورة أبونا تلقائياً إلى ملف .ico متوافق مع شريط مهام الويندوز"""
-    try:
-        priest_path = get_image_path("church_priest.jpg")
-        if os.path.exists(priest_path):
-            ico_path = os.path.join(BASE_DIR, "assets", "app_icon.ico")
-            img = Image.open(priest_path)
-            img.save(ico_path, format="ICO", sizes=[(256, 256)])
-            return ico_path
-    except Exception as e:
-        print(f"ICO generation error: {e}")
-    return ""
 
 # =========================================================
 # DATABASE & BACKUP LOGIC
@@ -179,11 +164,6 @@ def main(page: ft.Page):
     page.spacing = 0
     page.bgcolor = "#000000"
     page.rtl = True
-
-    # ضبط أيقونة نافذة شريط المهام في الويندوز
-    ico_file = generate_window_icon()
-    if ico_file:
-        page.window.icon = ico_file
 
     file_picker = ft.FilePicker()
     page.services.append(file_picker)
