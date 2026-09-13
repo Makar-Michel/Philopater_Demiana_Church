@@ -5,7 +5,6 @@ import sqlite3
 import shutil
 from datetime import datetime
 import flet as ft
-from PIL import Image
 
 # =========================================================
 # PATHS & DIRECTORIES
@@ -15,7 +14,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "church.db")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 BACKUPS_DIR = os.path.join(BASE_DIR, "backups")
-
 for folder in [UPLOADS_DIR, BACKUPS_DIR]:
     if not os.path.exists(folder):
         os.makedirs(folder)
