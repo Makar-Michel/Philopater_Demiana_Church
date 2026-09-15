@@ -20,40 +20,25 @@ for folder in [UPLOADS_DIR, BACKUPS_DIR]:
         os.makedirs(folder)
 
 def get_image_path(filename):
-    """البحث الذكي والإصلاح التلقائي لمسارات الصور على الأندرويد والكمبيوتر"""
+    """جلب مسار الصورة سواء كانت مساراً مطلقاً أو اسماً مجرداً"""
     if not filename:
         return ""
     
-    # إذا كانت الصورة موجودة بنفس المسار تماماً
     if os.path.exists(filename):
         return filename
 
-    # استخراج اسم الملف فقط للبحث عنه في مجلدات الأصول أو المرفوعات
     name_only = os.path.basename(filename)
-    name_without_ext = os.path.splitext(name_only)[0]
-    
-    possible_names = [
-        name_only,
-        f"{name_only}.jpg",
-        f"{name_only}.png",
-        f"{name_without_ext}.jpg",
-        f"{name_without_ext}.png",
-        f"{name_without_ext}.png.jpg",
-        f"{name_without_ext}.webp"
-    ]
     
     search_dirs = [
         UPLOADS_DIR,
         os.path.join(BASE_DIR, "assets"),
-        os.path.join(BASE_DIR, "src", "assets"),
         BASE_DIR
     ]
     
     for d in search_dirs:
-        for name in possible_names:
-            full_p = os.path.join(d, name)
-            if os.path.exists(full_p):
-                return full_p
+        full_p = os.path.join(d, name_only)
+        if os.path.exists(full_p):
+            return full_p
                 
     return filename
 
@@ -91,16 +76,8 @@ def auto_backup():
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         backup_file = os.path.join(BACKUPS_DIR, f"auto_backup_{timestamp}.db")
-        latest_backup = os.path.join(BACKUPS_DIR, "latest_backup.db")
-        
         shutil.copy2(DB_FILE, backup_file)
-        shutil.copy2(DB_FILE, latest_backup)
-        
-        all_backups = sorted([os.path.join(BACKUPS_DIR, f) for f in os.listdir(BACKUPS_DIR) if f.startswith("auto_backup_")])
-        if len(all_backups) > 5:
-            for old_b in all_backups[:-5]:
-                os.remove(old_b)
-        return latest_backup
+        return backup_file
     except Exception as e:
         print(f"Auto backup error: {e}")
         return None
@@ -109,9 +86,6 @@ def save_confessor(name, birth_date, phone, address, last_confession, has_family
     conn = get_db()
     family_json = json.dumps(family_members, ensure_ascii=False)
     
-    # حفظ اسم الملف فقط وليس المسار المطلق لضمان عمل الصورة على أي جهاز أو موبايل
-    clean_photo_path = os.path.basename(photo) if photo else ""
-    
     if confessor_id:
         conn.execute(
             """
@@ -119,7 +93,7 @@ def save_confessor(name, birth_date, phone, address, last_confession, has_family
             SET name=?, birth_date=?, phone=?, address=?, last_confession=?, has_family=?, family_json=?, notes=?, photo=?
             WHERE id=?
             """,
-            (name, birth_date, phone, address, last_confession, 1 if has_family else 0, family_json, notes, clean_photo_path, confessor_id)
+            (name, birth_date, phone, address, last_confession, 1 if has_family else 0, family_json, notes, photo, confessor_id)
         )
     else:
         conn.execute(
@@ -127,7 +101,7 @@ def save_confessor(name, birth_date, phone, address, last_confession, has_family
             INSERT INTO confessors (name, birth_date, phone, address, last_confession, has_family, family_json, notes, photo)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (name, birth_date, phone, address, last_confession, 1 if has_family else 0, family_json, notes, clean_photo_path)
+            (name, birth_date, phone, address, last_confession, 1 if has_family else 0, family_json, notes, photo)
         )
 
     conn.commit()
@@ -171,14 +145,15 @@ def main(page: ft.Page):
     page.rtl = True
 
     file_picker = ft.FilePicker()
-    page.services.append(file_picker)
+    page.overlay.append(file_picker)
 
     current_photo = {"value": ""}
     family_inputs = []
 
-    def show_message(message):
-        page.snack_bar = ft.SnackBar(content=ft.Text(message, text_align=ft.TextAlign.CENTER, weight=ft.FontWeight.BOLD, color="#FFFFFF"))
-        page.snack_bar.open = True
+    def show_snack(msg):
+        snack = ft.SnackBar(content=ft.Text(msg, text_align=ft.TextAlign.CENTER, weight=ft.FontWeight.BOLD, color="#FFFFFF"))
+        page.overlay.append(snack)
+        snack.open = True
         page.update()
 
     def church_background(content):
@@ -197,31 +172,36 @@ def main(page: ft.Page):
         )
 
     def export_backup_action(e):
-        latest = auto_backup()
-        if latest and os.path.exists(latest):
-            show_message(f"تم إنشاء النسخة الاحتياطية بنجاح:\n{latest}")
-        else:
-            show_message("حدث خطأ أثناء إنشاء النسخة الاحتياطية")
-
-    async def restore_backup_action(e):
         try:
-            files = await file_picker.pick_files(allow_multiple=False, dialog_title="اختر ملف النسخة الاحتياطية (.db)")
-            if files and files[0].path:
-                selected_db = files[0].path
-                if selected_db.endswith(".db"):
-                    shutil.copy2(selected_db, DB_FILE)
-                    show_message("تمت استعادة البيانات بنجاح!")
-                    show_home()
-                else:
-                    show_message("يرجى اختيار ملف قاعدة بيانات صحيح (.db)")
+            b_path = auto_backup()
+            if b_path and os.path.exists(b_path):
+                show_snack(f"تم حفظ النسخة بنجاح في التطبيق:\n{os.path.basename(b_path)}")
+            else:
+                show_snack("فشل إنشاء النسخة الاحتياطية")
         except Exception as ex:
-            show_message(f"خطأ في الاستعادة: {ex}")
+            show_snack(f"خطأ: {ex}")
+
+    def on_restore_result(e: ft.FilePickerResultEvent):
+        try:
+            if e.files and len(e.files) > 0:
+                selected_file = e.files[0]
+                if selected_file.path:
+                    shutil.copy2(selected_file.path, DB_FILE)
+                    show_snack("تمت استعادة النسخة الاحتياطية بنجاح!")
+                    show_home()
+        except Exception as ex:
+            show_snack(f"خطأ أثناء الاستعادة: {ex}")
+
+    file_picker.on_result = on_restore_result
+
+    def restore_backup_click(e):
+        file_picker.pick_files(allow_multiple=False, dialog_title="اختر ملف قاعدة البيانات (.db)")
 
     def show_home(e=None):
         page.controls.clear()
 
         logo_image = ft.Image(
-            src=get_image_path("icon.png.jpg"),
+            src=get_image_path("icon.png"),
             width=80,
             height=80,
             fit=ft.BoxFit.CONTAIN
@@ -257,7 +237,7 @@ def main(page: ft.Page):
         )
 
         backup_btn = ft.Button("نسخة محليّة", icon=ft.Icons.CLOUD_UPLOAD, on_click=export_backup_action)
-        restore_btn = ft.Button("استعادة نسخة", icon=ft.Icons.CLOUD_DOWNLOAD, on_click=restore_backup_action)
+        restore_btn = ft.Button("استعادة نسخة", icon=ft.Icons.CLOUD_DOWNLOAD, on_click=restore_backup_click)
 
         main_card = ft.Container(
             width=450,
@@ -334,7 +314,7 @@ def main(page: ft.Page):
                             border_radius=29,
                             bgcolor="#FFFFFF20",
                             alignment=ft.Alignment(0, 0),
-                            content=ft.Icon(ft.Icons.PERSON_OUTLINE, size=28, color="#FFFFFF"),
+                            content=ft.Icon(ft.Icons.PERSON, size=28, color="#FFFFFF"),
                         )
 
                     family_text = "لديه أسرة" if row["has_family"] else "بدون أسرة"
@@ -484,30 +464,51 @@ def main(page: ft.Page):
         last_confession_field = create_styled_textfield("آخر مرة اعترف إمتى؟", hint="01/09/2026", value=edit_data["last_confession"] if edit_data else "")
         notes_field = create_styled_textfield("ملاحظات", multiline=True, min_lines=3, max_lines=6, value=edit_data["notes"] if edit_data else "")
 
-        photo_preview = ft.Image(src=get_image_path(current_photo["value"]), width=120, height=120, fit=ft.BoxFit.COVER, border_radius=60, visible=bool(current_photo["value"]))
-        photo_placeholder = ft.Container(width=120, height=120, border_radius=60, bgcolor="#121212", border=ft.Border.all(2, "#FFFFFF"), alignment=ft.Alignment(0, 0), visible=not bool(current_photo["value"]), content=ft.Icon(ft.Icons.PERSON_OUTLINE, size=48, color="#FFFFFF"))
+        photo_preview = ft.Image(
+            src=get_image_path(current_photo["value"]), 
+            width=120, 
+            height=120, 
+            fit=ft.BoxFit.COVER, 
+            border_radius=60, 
+            visible=bool(current_photo["value"])
+        )
+        photo_placeholder = ft.Container(
+            width=120, 
+            height=120, 
+            border_radius=60, 
+            bgcolor="#121212", 
+            border=ft.Border.all(2, "#FFFFFF"), 
+            alignment=ft.Alignment(0, 0), 
+            visible=not bool(current_photo["value"]), 
+            content=ft.Icon(ft.Icons.PERSON, size=48, color="#FFFFFF")
+        )
 
-        async def choose_photo(e):
+        photo_picker = ft.FilePicker()
+        page.overlay.append(photo_picker)
+
+        def on_photo_picked(e: ft.FilePickerResultEvent):
             try:
-                files = await file_picker.pick_files(allow_multiple=False, file_type=ft.FilePickerFileType.IMAGE, with_data=True)
-                if not files or not files[0].bytes:
-                    return
+                if e.files and len(e.files) > 0:
+                    selected_file = e.files[0]
+                    target_name = f"confessor_{os.urandom(4).hex()}.jpg"
+                    target_path = os.path.join(UPLOADS_DIR, target_name)
 
-                selected_file = files[0]
-                save_filename = f"photo_{os.urandom(4).hex()}_{selected_file.name}"
-                save_path = os.path.join(UPLOADS_DIR, save_filename)
-                with open(save_path, "wb") as f:
-                    f.write(selected_file.bytes)
-
-                current_photo["value"] = save_filename
-                photo_preview.src = get_image_path(save_filename)
-                photo_preview.visible = True
-                photo_placeholder.visible = False
-                page.update()
+                    if selected_file.path and os.path.exists(selected_file.path):
+                        shutil.copy2(selected_file.path, target_path)
+                    current_photo["value"] = target_path
+                    photo_preview.src = target_path
+                    photo_preview.visible = True
+                    photo_placeholder.visible = False
+                    page.update()
             except Exception as ex:
-                show_message(f"خطأ في اختيار الصورة: {ex}")
+                show_snack(f"خطأ حفظ الصورة: {ex}")
 
-        photo_button = ft.Button("إضافة صورة", icon=ft.Icons.CAMERA_ALT_OUTLINED, on_click=choose_photo)
+        photo_picker.on_result = on_photo_picked
+
+        def pick_photo_click(e):
+            photo_picker.pick_files(allow_multiple=False, file_type=ft.FilePickerFileType.IMAGE)
+
+        photo_button = ft.Button("إضافة صورة", icon=ft.Icons.CAMERA_ALT_OUTLINED, on_click=pick_photo_click)
         photo_area = ft.Column(horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10, controls=[photo_placeholder, photo_preview, photo_button])
 
         family_switch = ft.Switch(label="لديه أسرة", value=bool(edit_data["has_family"]) if edit_data else False)
@@ -533,7 +534,7 @@ def main(page: ft.Page):
         def save_person(e):
             name = (name_field.value or "").strip()
             if not name:
-                show_message("اكتب اسم المعترف أولًا")
+                show_snack("اكتب اسم المعترف أولًا")
                 return
 
             parsed_family = []
@@ -557,7 +558,7 @@ def main(page: ft.Page):
                 confessor_id=edit_id,
             )
 
-            show_message("تم حفظ البيانات بنجاح")
+            show_snack("تم حفظ البيانات بنجاح")
             show_confessions()
 
         back_button = ft.Button("رجوع", icon=ft.Icons.ARROW_BACK, on_click=lambda e: show_confessions())
@@ -602,7 +603,7 @@ def main(page: ft.Page):
     def show_profile(confessor_id):
         row = get_confessor(confessor_id)
         if not row:
-            show_message("لم يتم العثور على البيانات")
+            show_snack("لم يتم العثور على البيانات")
             return
 
         page.controls.clear()
@@ -618,7 +619,7 @@ def main(page: ft.Page):
                 bgcolor="#121212", 
                 border=ft.Border.all(2, "#FFFFFF"),
                 alignment=ft.Alignment(0, 0), 
-                content=ft.Icon(ft.Icons.PERSON_OUTLINE, size=60, color="#FFFFFF")
+                content=ft.Icon(ft.Icons.PERSON, size=60, color="#FFFFFF")
             )
 
         def info_row(icon, title, value):
@@ -659,7 +660,7 @@ def main(page: ft.Page):
                             border=ft.Border.all(1, "#FFFFFF"),
                             content=ft.Row(
                                 controls=[
-                                    ft.Icon(ft.Icons.PERSON_OUTLINE, size=22, color="#FFFFFF"),
+                                    ft.Icon(ft.Icons.PERSON, size=22, color="#FFFFFF"),
                                     ft.Column(
                                         expand=True, 
                                         spacing=2, 
@@ -679,7 +680,7 @@ def main(page: ft.Page):
 
         def confirm_delete(e):
             delete_confessor_db(confessor_id)
-            show_message("تم حذف المعترف بنجاح")
+            show_snack("تم حذف المعترف بنجاح")
             show_confessions()
 
         edit_btn = ft.Button("تعديل البيانات", icon=ft.Icons.EDIT, on_click=lambda e: show_form_confessor(confessor_id))
@@ -780,7 +781,6 @@ def main(page: ft.Page):
 
         page.controls.clear()
 
-        # ضبط صورة أبونا لعرضها كاملة بدون زووم أو قص
         priest_screen = ft.Container(
             expand=True,
             bgcolor="#000000",
