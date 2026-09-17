@@ -1,20 +1,16 @@
 [project]
-name = "alraei"
+name = "philopater-demiana-church"
 version = "0.1.0"
-description = "Philopater Demiana Church Application"
-readme = "README.md"
-requires-python = ">=3.10"
+description = "تطبيق راعي الرعاة"
 dependencies = [
-    "flet>=0.28.1",
+    "flet>=0.23.0",
 ]
 
 [tool.flet]
-name = "راعي الرعاة"
-product = "راعي الرعاة"
-company = "Philopater Demiana Church"
+assets_dir = "assets"
 
 [tool.flet.app]
 icon = "assets/icon.png"
 
 [tool.flet.android]
-icon = "assets/icon.png"
+icon = "assets/icon_android.png"

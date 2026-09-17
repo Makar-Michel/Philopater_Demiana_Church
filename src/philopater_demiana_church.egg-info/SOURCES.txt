@@ -1,0 +1,8 @@
+README.md
+pyproject.toml
+src/philopater_demiana_church.egg-info/PKG-INFO
+src/philopater_demiana_church.egg-info/SOURCES.txt
+src/philopater_demiana_church.egg-info/dependency_links.txt
+src/philopater_demiana_church.egg-info/requires.txt
+src/philopater_demiana_church.egg-info/top_level.txt
+tests/test_main.py
