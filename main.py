@@ -3,6 +3,8 @@ import json
 import os
 import sqlite3
 import shutil
+import base64
+import csv
 from datetime import datetime
 import flet as ft
 
@@ -33,13 +35,23 @@ def make_upload_photo_name(source_name=""):
         ext = ".jpg"
     return f"confessor_{os.urandom(4).hex()}{ext}"
 
-def resolve_image_path(filename):
-    """إرجاع مسار صورة صالح لنسخة Flet الحالية."""
-    if not filename:
+def file_to_base64(file_path):
+    if not file_path or not os.path.exists(file_path):
+        return ""
+    try:
+        ext = os.path.splitext(file_path)[1].lower().replace(".", "")
+        if ext == "jpg":
+            ext = "jpeg"
+        with open(file_path, "rb") as image_file:
+            encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
+            return f"data:image/{ext};base64,{encoded_string}"
+    except Exception as e:
+        print(f"Error encoding image: {e}")
         return ""
 
-    if os.path.exists(filename):
-        return filename
+def resolve_image_path(filename):
+    if not filename:
+        return ""
 
     name_only = os.path.basename(filename)
     candidates = [
@@ -48,11 +60,12 @@ def resolve_image_path(filename):
         os.path.join(ASSETS_DIR, "people", name_only),
         os.path.join(BASE_DIR, filename),
         os.path.join(BASE_DIR, name_only),
+        filename,
     ]
 
     for path in candidates:
         if os.path.exists(path):
-            return path
+            return file_to_base64(path)
     return ""
 
 # =========================================================
@@ -145,6 +158,39 @@ def get_confessor(confessor_id):
     conn.close()
     return row
 
+def import_csv_to_db(file_path):
+    """قراءة ملف الشيت وإضافة البيانات لقاعدة البيانات بدون pandas"""
+    try:
+        count = 0
+        conn = get_db()
+        with open(file_path, mode='r', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                name = str(row.get("الاسم", "") or "").strip()
+                if not name:
+                    continue
+                
+                birth_date = str(row.get("تاريخ الميلاد", "") or "").strip()
+                phone = str(row.get("الهاتف", "") or "").strip()
+                address = str(row.get("العنوان", "") or "").strip()
+                last_confession = str(row.get("آخر اعتراف", "") or "").strip()
+                notes = str(row.get("ملاحظات", "") or "").strip()
+                
+                conn.execute(
+                    """
+                    INSERT INTO confessors (name, birth_date, phone, address, last_confession, has_family, family_json, notes, photo)
+                    VALUES (?, ?, ?, ?, ?, 0, '[]', ?, '')
+                    """,
+                    (name, birth_date, phone, address, last_confession, notes)
+                )
+                count += 1
+        conn.commit()
+        conn.close()
+        auto_backup()
+        return True, f"تم استيراد {count} معترف بنجاح!"
+    except Exception as e:
+        return False, f"خطأ في قراءة الملف: {e}"
+
 # =========================================================
 # MAIN APPLICATION
 # =========================================================
@@ -194,7 +240,7 @@ def main(page: ft.Page):
         try:
             b_path = auto_backup()
             if b_path and os.path.exists(b_path):
-                show_snack(f"تم حفظ النسخة بنجاح:\n{os.path.basename(b_path)}")
+                show_snack(f"تم حفظ النسخة الاحتياطية في مجلد backups:\n{os.path.basename(b_path)}")
             else:
                 show_snack("فشل إنشاء النسخة الاحتياطية")
         except Exception as ex:
@@ -204,18 +250,56 @@ def main(page: ft.Page):
         try:
             if e.files and len(e.files) > 0:
                 selected_file = e.files[0]
-                if selected_file.path:
-                    shutil.copy2(selected_file.path, DB_FILE)
+                file_path = selected_file.path
+
+                if file_path and os.path.exists(file_path):
+                    shutil.copy2(file_path, DB_FILE)
                     show_snack("تمت استعادة النسخة الاحتياطية بنجاح!")
                     show_home()
+                elif getattr(selected_file, "bytes", None):
+                    with open(DB_FILE, "wb") as f:
+                        f.write(selected_file.bytes)
+                    show_snack("تمت استعادة النسخة الاحتياطية بنجاح!")
+                    show_home()
+                else:
+                    show_snack("تعذر قراءة الملف المختار")
         except Exception as ex:
             show_snack(f"خطأ أثناء الاستعادة: {ex}")
 
+    def on_excel_picked(e: ft.FilePickerResultEvent):
+        try:
+            if e.files and len(e.files) > 0:
+                selected_file = e.files[0]
+                file_path = selected_file.path
+                if file_path and os.path.exists(file_path):
+                    success, msg = import_csv_to_db(file_path)
+                    show_snack(msg)
+                    if success:
+                        show_confessions()
+                else:
+                    show_snack("تعذر قراءة الملف المختار")
+        except Exception as ex:
+            show_snack(f"خطأ في الاستيراد: {ex}")
+
     db_picker = ft.FilePicker(on_result=on_restore_result)
+    excel_picker = ft.FilePicker(on_result=on_excel_picked)
+    
     page.services.append(db_picker)
+    page.services.append(excel_picker)
 
     async def restore_backup_click(e):
-        await db_picker.pick_files(allow_multiple=False, dialog_title="اختر ملف قاعدة البيانات (.db)")
+        await db_picker.pick_files(
+            allow_multiple=False, 
+            dialog_title="اختر ملف قاعدة البيانات (.db)",
+            with_data=True
+        )
+
+    async def import_excel_click(e):
+        await excel_picker.pick_files(
+            allow_multiple=False,
+            dialog_title="اختر ملف الشيت (CSV)",
+            allowed_extensions=["csv"]
+        )
 
     def show_home(e=None):
         page.controls.clear()
@@ -258,9 +342,10 @@ def main(page: ft.Page):
 
         backup_btn = ft.Button("نسخة محليّة", icon=ft.Icons.CLOUD_UPLOAD, on_click=export_backup_action)
         restore_btn = ft.Button("استعادة نسخة", icon=ft.Icons.CLOUD_DOWNLOAD, on_click=restore_backup_click)
+        excel_btn = ft.Button("استيراد شيت", icon=ft.Icons.TABLE_CHART, on_click=import_excel_click)
 
         main_card = ft.Container(
-            width=450,
+            width=480,
             padding=25,
             border_radius=28,
             bgcolor="#121212EE",
@@ -274,7 +359,7 @@ def main(page: ft.Page):
                     subtitle, 
                     ft.Container(height=5), 
                     confession_card,
-                    ft.Row(alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=8, controls=[backup_btn, restore_btn])
+                    ft.Row(alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=8, controls=[backup_btn, restore_btn, excel_btn])
                 ],
             ),
         )
@@ -323,9 +408,9 @@ def main(page: ft.Page):
                 )
             else:
                 for row in rows:
-                    photo_src = resolve_image_path(row["photo"])
-                    if photo_src:
-                        image_control = ft.Image(src=photo_src, width=58, height=58, fit=ft.BoxFit.COVER, border_radius=29)
+                    photo_b64 = resolve_image_path(row["photo"])
+                    if photo_b64:
+                        image_control = ft.Image(src=photo_b64, width=58, height=58, fit=ft.BoxFit.COVER, border_radius=29)
                     else:
                         image_control = ft.Container(
                             width=58,
@@ -480,15 +565,15 @@ def main(page: ft.Page):
         last_confession_field = create_styled_textfield("آخر مرة اعترف إمتى؟", hint="01/09/2026", value=edit_data["last_confession"] if edit_data else "")
         notes_field = create_styled_textfield("ملاحظات", multiline=True, min_lines=3, max_lines=6, value=edit_data["notes"] if edit_data else "")
 
-        initial_photo_src = resolve_image_path(current_photo["value"])
+        initial_photo_b64 = resolve_image_path(current_photo["value"])
         
         photo_preview = ft.Image(
-            src=initial_photo_src if initial_photo_src else "", 
+            src=initial_photo_b64 if initial_photo_b64 else "", 
             width=120, 
             height=120, 
             fit=ft.BoxFit.COVER, 
             border_radius=60, 
-            visible=bool(initial_photo_src)
+            visible=bool(initial_photo_b64)
         )
         photo_placeholder = ft.Container(
             width=120, 
@@ -497,19 +582,13 @@ def main(page: ft.Page):
             bgcolor="#121212", 
             border=ft.Border.all(2, "#FFFFFF"), 
             alignment=ft.Alignment(0, 0), 
-            visible=not bool(initial_photo_src), 
+            visible=not bool(initial_photo_b64), 
             content=ft.Icon(ft.Icons.PERSON, size=48, color="#FFFFFF")
         )
-
-        last_photo_key = {"value": ""}
 
         def save_picked_photo(selected_file):
             file_path = selected_file.path
             file_name = selected_file.name or os.path.basename(file_path or "photo.jpg")
-            file_key = f"{file_name}:{getattr(selected_file, 'size', '')}:{file_path or ''}"
-            if file_key == last_photo_key["value"]:
-                return
-            last_photo_key["value"] = file_key
 
             try:
                 target_name = make_upload_photo_name(file_name)
@@ -522,11 +601,11 @@ def main(page: ft.Page):
                 elif file_path and os.path.exists(file_path):
                     shutil.copy2(file_path, target_path)
                 else:
-                    show_snack("لم أستطع قراءة الصورة المختارة. جرّب تشغيل البرنامج Desktop وليس Web.")
+                    show_snack("لم يتم قراءة الصورة بشكل صحيح")
                     return
 
                 current_photo["value"] = target_name
-                photo_preview.src = target_path
+                photo_preview.src = file_to_base64(target_path)
                 photo_preview.visible = True
                 photo_placeholder.visible = False
                 page.update()
@@ -542,13 +621,11 @@ def main(page: ft.Page):
         page.services.append(photo_picker)
 
         async def pick_photo_click(e):
-            selected_files = await photo_picker.pick_files(
+            await photo_picker.pick_files(
                 allow_multiple=False, 
                 file_type=ft.FilePickerFileType.IMAGE,
                 with_data=True,
             )
-            if selected_files and len(selected_files) > 0:
-                save_picked_photo(selected_files[0])
 
         photo_button = ft.Button("إضافة صورة", icon=ft.Icons.CAMERA_ALT_OUTLINED, on_click=pick_photo_click)
         photo_area = ft.Column(horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10, controls=[photo_placeholder, photo_preview, photo_button])
@@ -650,9 +727,9 @@ def main(page: ft.Page):
 
         page.controls.clear()
 
-        photo_src = resolve_image_path(row["photo"])
-        if photo_src:
-            profile_image = ft.Image(src=photo_src, width=140, height=140, fit=ft.BoxFit.COVER, border_radius=70)
+        photo_b64 = resolve_image_path(row["photo"])
+        if photo_b64:
+            profile_image = ft.Image(src=photo_b64, width=140, height=140, fit=ft.BoxFit.COVER, border_radius=70)
         else:
             profile_image = ft.Container(
                 width=140, 
