@@ -5,7 +5,12 @@ import sqlite3
 import shutil
 import base64
 import csv
-from datetime import datetime
+import io
+import re
+import zipfile
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 import flet as ft
 
 # =========================================================
@@ -158,38 +163,388 @@ def get_confessor(confessor_id):
     conn.close()
     return row
 
-def import_csv_to_db(file_path):
-    """قراءة ملف الشيت وإضافة البيانات لقاعدة البيانات بدون pandas"""
+def normalize_header(value):
+    text = str(value or "").strip().lower()
+    replacements = {
+        "أ": "ا",
+        "إ": "ا",
+        "آ": "ا",
+        "ى": "ي",
+        "ؤ": "و",
+        "ئ": "ي",
+        "ة": "ه",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    text = re.sub(r"[\u064b-\u065f\u0670ـ]", "", text)
+    text = re.sub(r"[^0-9a-z\u0600-\u06ff]+", "", text)
+    return text
+
+FIELD_ALIASES = {
+    "name": ["الاسم", "اسم", "اسمالمعترف", "الاسمالكامل", "name", "fullname"],
+    "birth_date": ["تاريخالميلاد", "الميلاد", "السن", "العمر", "birthdate", "dateofbirth", "age"],
+    "phone": ["الهاتف", "رقمالهاتف", "الموبايل", "رقمالموبايل", "التليفون", "رقمالتليفون", "phone", "mobile"],
+    "address": ["العنوان", "عنوان", "address"],
+    "last_confession": ["اخرالاعتراف", "اخراعتراف", "اخرمرهاعترف", "اخرمره", "lastconfession"],
+    "notes": ["ملاحظات", "ملاحظه", "notes", "note"],
+}
+
+def get_row_value(row, field_name):
+    normalized_row = {normalize_header(k): str(v or "").strip() for k, v in row.items()}
+    for alias in FIELD_ALIASES[field_name]:
+        value = normalized_row.get(normalize_header(alias), "")
+        if value:
+            return value
+    return ""
+
+def clean_excel_value(value):
+    text = str(value or "").strip()
+    if re.fullmatch(r"0\d+", text):
+        return text
+    if re.fullmatch(r"-?\d+(\.\d+)?([eE][+-]?\d+)?", text):
+        try:
+            number = Decimal(text)
+            if number == number.to_integral_value():
+                return format(number.quantize(Decimal(1)), "f")
+        except (InvalidOperation, ValueError):
+            pass
+    if re.fullmatch(r"-?\d+\.0", text):
+        return text[:-2]
+    return text
+
+def excel_serial_to_date(value):
     try:
-        count = 0
-        conn = get_db()
-        with open(file_path, mode='r', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                name = str(row.get("الاسم", "") or "").strip()
-                if not name:
+        serial = float(value)
+        if serial <= 0:
+            return clean_excel_value(value)
+        base = datetime(1899, 12, 30)
+        return (base + timedelta(days=serial)).strftime("%d/%m/%Y")
+    except Exception:
+        return clean_excel_value(value)
+
+def read_text_sheet(raw_data):
+    content_str = ""
+    for enc in ["utf-8-sig", "utf-8", "cp1256", "windows-1256", "iso-8859-1"]:
+        try:
+            content_str = raw_data.decode(enc)
+            break
+        except (UnicodeDecodeError, TypeError):
+            continue
+
+    if not content_str:
+        raise ValueError("فشل في قراءة ترميز الملف. لو الملف CSV احفظه بترميز UTF-8.")
+
+    sample = content_str[:2048]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
+        delimiter = dialect.delimiter
+    except Exception:
+        first_line = content_str.splitlines()[0] if content_str.splitlines() else ""
+        delimiter = "\t" if "\t" in first_line else (";" if ";" in first_line and "," not in first_line else ",")
+
+    reader = csv.DictReader(io.StringIO(content_str), delimiter=delimiter)
+    return [{str(k).strip(): clean_excel_value(v) for k, v in row.items() if k} for row in reader]
+
+def xml_namespace(root):
+    if root.tag.startswith("{"):
+        return {"x": root.tag[1:].split("}")[0]}
+    return {}
+
+def get_xlsx_shared_strings(zip_file):
+    if "xl/sharedStrings.xml" not in zip_file.namelist():
+        return []
+    root = ET.fromstring(zip_file.read("xl/sharedStrings.xml"))
+    ns = xml_namespace(root)
+    strings = []
+    for item in root.findall(".//x:si", ns):
+        parts = []
+        for text_node in item.findall(".//x:t", ns):
+            parts.append(text_node.text or "")
+        strings.append("".join(parts))
+    return strings
+
+def get_xlsx_date_styles(zip_file):
+    if "xl/styles.xml" not in zip_file.namelist():
+        return set()
+
+    root = ET.fromstring(zip_file.read("xl/styles.xml"))
+    ns = xml_namespace(root)
+    custom_date_ids = set()
+    standard_date_ids = {14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 30, 36, 45, 46, 47, 50, 57}
+
+    for num_fmt in root.findall(".//x:numFmt", ns):
+        fmt_id = int(num_fmt.attrib.get("numFmtId", "0"))
+        fmt_code = num_fmt.attrib.get("formatCode", "").lower()
+        if any(ch in fmt_code for ch in ["d", "m", "y", "h", "s"]):
+            custom_date_ids.add(fmt_id)
+
+    date_styles = set()
+    cell_xfs = root.find(".//x:cellXfs", ns)
+    if cell_xfs is not None:
+        for index, xf in enumerate(cell_xfs.findall("x:xf", ns)):
+            fmt_id = int(xf.attrib.get("numFmtId", "0"))
+            if fmt_id in standard_date_ids or fmt_id in custom_date_ids:
+                date_styles.add(index)
+    return date_styles
+
+def get_first_xlsx_sheet_path(zip_file):
+    names = set(zip_file.namelist())
+    if "xl/workbook.xml" not in names:
+        return "xl/worksheets/sheet1.xml"
+
+    workbook = ET.fromstring(zip_file.read("xl/workbook.xml"))
+    ns = xml_namespace(workbook)
+    rel_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    first_sheet = workbook.find(".//x:sheet", ns)
+    if first_sheet is None:
+        return "xl/worksheets/sheet1.xml"
+
+    rel_id = first_sheet.attrib.get(f"{{{rel_ns}}}id")
+    if not rel_id or "xl/_rels/workbook.xml.rels" not in names:
+        return "xl/worksheets/sheet1.xml"
+
+    rels = ET.fromstring(zip_file.read("xl/_rels/workbook.xml.rels"))
+    for rel in rels:
+        if rel.attrib.get("Id") == rel_id:
+            target = rel.attrib.get("Target", "worksheets/sheet1.xml")
+            if target.startswith("/"):
+                return target.lstrip("/")
+            return "xl/" + target.lstrip("/")
+    return "xl/worksheets/sheet1.xml"
+
+def column_index_from_ref(cell_ref):
+    letters = "".join(ch for ch in cell_ref if ch.isalpha())
+    index = 0
+    for ch in letters:
+        index = index * 26 + (ord(ch.upper()) - ord("A") + 1)
+    return max(index - 1, 0)
+
+def read_xlsx_sheet(raw_data):
+    with zipfile.ZipFile(io.BytesIO(raw_data)) as zip_file:
+        sheet_path = get_first_xlsx_sheet_path(zip_file)
+        if sheet_path not in zip_file.namelist():
+            raise ValueError("لم أجد أول شيت داخل ملف Excel.")
+
+        shared_strings = get_xlsx_shared_strings(zip_file)
+        date_styles = get_xlsx_date_styles(zip_file)
+        sheet = ET.fromstring(zip_file.read(sheet_path))
+        ns = xml_namespace(sheet)
+        table_rows = []
+
+        for row_node in sheet.findall(".//x:sheetData/x:row", ns):
+            values = []
+            for cell in row_node.findall("x:c", ns):
+                col_index = column_index_from_ref(cell.attrib.get("r", "A1"))
+                while len(values) <= col_index:
+                    values.append("")
+
+                cell_type = cell.attrib.get("t", "")
+                style_index = int(cell.attrib.get("s", "0") or "0")
+                value_node = cell.find("x:v", ns)
+
+                if cell_type == "s" and value_node is not None:
+                    idx = int(value_node.text or "0")
+                    value = shared_strings[idx] if idx < len(shared_strings) else ""
+                elif cell_type == "inlineStr":
+                    value = "".join(t.text or "" for t in cell.findall(".//x:t", ns))
+                elif value_node is not None:
+                    value = value_node.text or ""
+                    if style_index in date_styles:
+                        value = excel_serial_to_date(value)
+                    else:
+                        value = clean_excel_value(value)
+                else:
+                    value = ""
+
+                values[col_index] = value
+
+            if any(str(v).strip() for v in values):
+                table_rows.append(values)
+
+    if not table_rows:
+        return []
+
+    headers = [str(v).strip() for v in table_rows[0]]
+    records = []
+    for values in table_rows[1:]:
+        record = {}
+        for idx, header in enumerate(headers):
+            if header:
+                record[header] = clean_excel_value(values[idx] if idx < len(values) else "")
+        records.append(record)
+    return records
+
+def insert_sheet_rows_to_db(rows):
+    count = 0
+    skipped_duplicates = 0
+    conn = get_db()
+    try:
+        for row in rows:
+            name = get_row_value(row, "name")
+            if not name:
+                continue
+
+            birth_date = get_row_value(row, "birth_date")
+            phone = get_row_value(row, "phone")
+            address = get_row_value(row, "address")
+            last_confession = get_row_value(row, "last_confession")
+            notes = get_row_value(row, "notes")
+
+            if phone:
+                duplicate = conn.execute(
+                    "SELECT id FROM confessors WHERE name = ? AND phone = ? LIMIT 1",
+                    (name, phone),
+                ).fetchone()
+                if duplicate:
+                    skipped_duplicates += 1
                     continue
-                
-                birth_date = str(row.get("تاريخ الميلاد", "") or "").strip()
-                phone = str(row.get("الهاتف", "") or "").strip()
-                address = str(row.get("العنوان", "") or "").strip()
-                last_confession = str(row.get("آخر اعتراف", "") or "").strip()
-                notes = str(row.get("ملاحظات", "") or "").strip()
-                
-                conn.execute(
-                    """
-                    INSERT INTO confessors (name, birth_date, phone, address, last_confession, has_family, family_json, notes, photo)
-                    VALUES (?, ?, ?, ?, ?, 0, '[]', ?, '')
-                    """,
-                    (name, birth_date, phone, address, last_confession, notes)
-                )
-                count += 1
+
+            conn.execute(
+                """
+                INSERT INTO confessors (name, birth_date, phone, address, last_confession, has_family, family_json, notes, photo)
+                VALUES (?, ?, ?, ?, ?, 0, '[]', ?, '')
+                """,
+                (name, birth_date, phone, address, last_confession, notes),
+            )
+            count += 1
+
         conn.commit()
+    finally:
         conn.close()
+
+    if count:
         auto_backup()
-        return True, f"تم استيراد {count} معترف بنجاح!"
+    return count, skipped_duplicates
+
+def import_sheet_to_db(file_stream_or_path, file_name=""):
+    """استيراد CSV/TSV/XLSX إلى جدول المعترفين."""
+    try:
+        if isinstance(file_stream_or_path, bytes):
+            raw_data = file_stream_or_path
+        elif isinstance(file_stream_or_path, str) and os.path.exists(file_stream_or_path):
+            with open(file_stream_or_path, "rb") as f:
+                raw_data = f.read()
+            if not file_name:
+                file_name = os.path.basename(file_stream_or_path)
+        else:
+            return False, "تعذر الوصول للملف أو قراءة بياناته"
+
+        ext = os.path.splitext(file_name or "")[1].lower()
+        is_xlsx = ext == ".xlsx" or raw_data[:2] == b"PK"
+        rows = read_xlsx_sheet(raw_data) if is_xlsx else read_text_sheet(raw_data)
+
+        if not rows:
+            return False, "الشيت فارغ أو لا يحتوي على صفوف بيانات"
+
+        count, skipped = insert_sheet_rows_to_db(rows)
+        if count == 0:
+            return False, "لم أجد عمود الاسم. خلي أول صف يحتوي على: الاسم، رقم الهاتف، العنوان، تاريخ الميلاد، آخر اعتراف، ملاحظات"
+
+        extra = f" وتم تجاهل {skipped} مكرر" if skipped else ""
+        return True, f"تم استيراد {count} معترف بنجاح{extra}!"
+    except zipfile.BadZipFile:
+        return False, "ملف Excel غير صالح. اختر ملف .xlsx أو احفظ الشيت CSV."
     except Exception as e:
-        return False, f"خطأ في قراءة الملف: {e}"
+        return False, f"خطأ أثناء الاستيراد: {str(e)}"
+
+def excel_column_name(index):
+    name = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        name = chr(65 + remainder) + name
+    return name
+
+def xml_escape(value):
+    text = str(value or "")
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+def xlsx_inline_cell(row_index, col_index, value):
+    cell_ref = f"{excel_column_name(col_index)}{row_index}"
+    safe_value = xml_escape(value)
+    return f'<c r="{cell_ref}" t="inlineStr"><is><t>{safe_value}</t></is></c>'
+
+def build_confessors_xlsx_bytes():
+    rows = get_confessors("")
+    headers = ["الاسم", "تاريخ الميلاد", "رقم الهاتف", "العنوان", "آخر اعتراف", "لديه أسرة", "أفراد الأسرة", "ملاحظات", "الصورة"]
+    sheet_rows = []
+    sheet_rows.append(headers)
+
+    for row in rows:
+        try:
+            family_members = json.loads(row["family_json"] or "[]")
+        except Exception:
+            family_members = []
+        family_text = "؛ ".join(
+            f"{member.get('name', '')} ({member.get('relation', '')})".strip()
+            for member in family_members
+            if member.get("name")
+        )
+        sheet_rows.append([
+            row["name"] or "",
+            row["birth_date"] or "",
+            row["phone"] or "",
+            row["address"] or "",
+            row["last_confession"] or "",
+            "نعم" if row["has_family"] else "لا",
+            family_text,
+            row["notes"] or "",
+            row["photo"] or "",
+        ])
+
+    worksheet_rows = []
+    for row_index, values in enumerate(sheet_rows, start=1):
+        cells = "".join(xlsx_inline_cell(row_index, col_index, value) for col_index, value in enumerate(values, start=1))
+        worksheet_rows.append(f'<row r="{row_index}">{cells}</row>')
+
+    sheet_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheetViews><sheetView rightToLeft="1" workbookViewId="0"/></sheetViews>
+<cols>
+<col min="1" max="1" width="28" customWidth="1"/>
+<col min="2" max="5" width="18" customWidth="1"/>
+<col min="6" max="6" width="12" customWidth="1"/>
+<col min="7" max="8" width="35" customWidth="1"/>
+<col min="9" max="9" width="24" customWidth="1"/>
+</cols>
+<sheetData>{''.join(worksheet_rows)}</sheetData>
+</worksheet>'''
+
+    workbook_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="المعترفين" sheetId="1" r:id="rId1"/></sheets>
+</workbook>'''
+
+    workbook_rels = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>'''
+
+    root_rels = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>'''
+
+    content_types = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>'''
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        zip_file.writestr("[Content_Types].xml", content_types)
+        zip_file.writestr("_rels/.rels", root_rels)
+        zip_file.writestr("xl/workbook.xml", workbook_xml)
+        zip_file.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        zip_file.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+    return output.getvalue(), len(rows)
 
 # =========================================================
 # MAIN APPLICATION
@@ -236,70 +591,79 @@ def main(page: ft.Page):
             ],
         )
 
-    def export_backup_action(e):
+    excel_export_picker = ft.FilePicker()
+    page.services.append(excel_export_picker)
+
+    async def export_excel_backup_action(e):
         try:
-            b_path = auto_backup()
-            if b_path and os.path.exists(b_path):
-                show_snack(f"تم حفظ النسخة الاحتياطية في مجلد backups:\n{os.path.basename(b_path)}")
+            excel_bytes, row_count = build_confessors_xlsx_bytes()
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            backup_name = f"confessors_backup_{timestamp}.xlsx"
+            local_backup_path = os.path.join(BACKUPS_DIR, backup_name)
+
+            with open(local_backup_path, "wb") as backup_file:
+                backup_file.write(excel_bytes)
+
+            saved_path = await excel_export_picker.save_file(
+                dialog_title="احفظ ملف Excel",
+                file_name=backup_name,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["xlsx"],
+                src_bytes=excel_bytes,
+            )
+
+            if saved_path:
+                show_snack(f"تم تصدير {row_count} معترف إلى Excel:\n{backup_name}")
             else:
-                show_snack("فشل إنشاء النسخة الاحتياطية")
+                show_snack(f"تم حفظ ملف Excel في backups:\n{backup_name}")
         except Exception as ex:
             show_snack(f"خطأ: {ex}")
 
-    def on_restore_result(e: ft.FilePickerResultEvent):
-        try:
-            if e.files and len(e.files) > 0:
-                selected_file = e.files[0]
-                file_path = selected_file.path
+    last_import_key = {"value": ""}
 
-                if file_path and os.path.exists(file_path):
-                    shutil.copy2(file_path, DB_FILE)
-                    show_snack("تمت استعادة النسخة الاحتياطية بنجاح!")
-                    show_home()
-                elif getattr(selected_file, "bytes", None):
-                    with open(DB_FILE, "wb") as f:
-                        f.write(selected_file.bytes)
-                    show_snack("تمت استعادة النسخة الاحتياطية بنجاح!")
-                    show_home()
-                else:
-                    show_snack("تعذر قراءة الملف المختار")
+    def import_selected_sheet_file(selected_file):
+        try:
+            file_bytes = getattr(selected_file, "bytes", None)
+            file_path = getattr(selected_file, "path", None)
+            file_name = getattr(selected_file, "name", None) or os.path.basename(file_path or "")
+            file_key = f"{file_name}:{getattr(selected_file, 'size', '')}:{file_path or ''}"
+            if file_key == last_import_key["value"]:
+                return
+            last_import_key["value"] = file_key
+
+            if file_bytes:
+                success, msg = import_sheet_to_db(file_bytes, file_name)
+            elif file_path and os.path.exists(file_path):
+                success, msg = import_sheet_to_db(file_path, file_name)
+            else:
+                show_snack("تعذر قراءة بيانات الملف المختار")
+                return
+
+            show_snack(msg)
+            if success:
+                show_confessions()
         except Exception as ex:
-            show_snack(f"خطأ أثناء الاستعادة: {ex}")
+            show_snack(f"خطأ غير متوقع: {ex}")
 
     def on_excel_picked(e: ft.FilePickerResultEvent):
-        try:
-            if e.files and len(e.files) > 0:
-                selected_file = e.files[0]
-                file_path = selected_file.path
-                if file_path and os.path.exists(file_path):
-                    success, msg = import_csv_to_db(file_path)
-                    show_snack(msg)
-                    if success:
-                        show_confessions()
-                else:
-                    show_snack("تعذر قراءة الملف المختار")
-        except Exception as ex:
-            show_snack(f"خطأ في الاستيراد: {ex}")
+        if e.files and len(e.files) > 0:
+            import_selected_sheet_file(e.files[0])
+        else:
+            show_snack("تم إلغاء اختيار الملف")
 
-    db_picker = ft.FilePicker(on_result=on_restore_result)
     excel_picker = ft.FilePicker(on_result=on_excel_picked)
-    
-    page.services.append(db_picker)
     page.services.append(excel_picker)
 
-    async def restore_backup_click(e):
-        await db_picker.pick_files(
-            allow_multiple=False, 
-            dialog_title="اختر ملف قاعدة البيانات (.db)",
-            with_data=True
-        )
-
     async def import_excel_click(e):
-        await excel_picker.pick_files(
+        selected_files = await excel_picker.pick_files(
             allow_multiple=False,
-            dialog_title="اختر ملف الشيت (CSV)",
-            allowed_extensions=["csv"]
+            dialog_title="اختر ملف الشيت",
+            file_type=ft.FilePickerFileType.CUSTOM,
+            allowed_extensions=["xlsx", "csv", "tsv"],
+            with_data=True,
         )
+        if selected_files and len(selected_files) > 0:
+            import_selected_sheet_file(selected_files[0])
 
     def show_home(e=None):
         page.controls.clear()
@@ -340,9 +704,8 @@ def main(page: ft.Page):
             ),
         )
 
-        backup_btn = ft.Button("نسخة محليّة", icon=ft.Icons.CLOUD_UPLOAD, on_click=export_backup_action)
-        restore_btn = ft.Button("استعادة نسخة", icon=ft.Icons.CLOUD_DOWNLOAD, on_click=restore_backup_click)
-        excel_btn = ft.Button("استيراد شيت", icon=ft.Icons.TABLE_CHART, on_click=import_excel_click)
+        backup_btn = ft.Button("Backup Sheet", icon=ft.Icons.DOWNLOAD, on_click=export_excel_backup_action)
+        excel_btn = ft.Button("Upload Sheet", icon=ft.Icons.TABLE_CHART, on_click=import_excel_click)
 
         main_card = ft.Container(
             width=480,
@@ -359,7 +722,7 @@ def main(page: ft.Page):
                     subtitle, 
                     ft.Container(height=5), 
                     confession_card,
-                    ft.Row(alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=8, controls=[backup_btn, restore_btn, excel_btn])
+                    ft.Row(alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=8, controls=[backup_btn, excel_btn])
                 ],
             ),
         )
@@ -587,8 +950,8 @@ def main(page: ft.Page):
         )
 
         def save_picked_photo(selected_file):
-            file_path = selected_file.path
-            file_name = selected_file.name or os.path.basename(file_path or "photo.jpg")
+            file_path = getattr(selected_file, "path", None)
+            file_name = getattr(selected_file, "name", None) or os.path.basename(file_path or "photo.jpg")
 
             try:
                 target_name = make_upload_photo_name(file_name)
