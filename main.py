@@ -578,65 +578,137 @@ def main(page: ft.Page):
         refresh_list()
 
     def add_family_member_ui(family_column, name_val="", rel_val=""):
-        # صلة القرابة مع أيقونة مناسبة
+        # أفراد الأسرة يتم اختيارهم من المعترفين الموجودين بالفعل.
         relation_options = [
             ("زوج", ft.Icons.FAVORITE),
             ("زوجة", ft.Icons.FAVORITE_BORDER),
-            ("ابن", ft.Icons.CHILD_CARE),
-            ("ابنة", ft.Icons.CHILD_CARE),
-            ("أب", ft.Icons.ELDERLY),
-            ("أم", ft.Icons.ELDERLY),
-            ("جد", ft.Icons.ELDERLY),
-            ("جدة", ft.Icons.ELDERLY),
+            ("ابن", ft.Icons.BOY),
+            ("ابنة", ft.Icons.GIRL),
+            ("أب", ft.Icons.MAN),
+            ("أم", ft.Icons.WOMAN),
             ("أخ", ft.Icons.PERSON),
             ("أخت", ft.Icons.PERSON_OUTLINE),
+            ("جد", ft.Icons.ELDERLY),
+            ("جدة", ft.Icons.ELDERLY_WOMAN),
             ("حفيد", ft.Icons.CHILD_CARE),
             ("حفيدة", ft.Icons.CHILD_CARE),
             ("قريب", ft.Icons.GROUP),
-            ("قريبة", ft.Icons.GROUP),
+            ("قريبة", ft.Icons.GROUP_OUTLINED),
             ("أخرى", ft.Icons.PERSON_OUTLINE),
         ]
-        icon_map = {name: icon for name, icon in relation_options}
-        selected_relation = rel_val if rel_val in icon_map else ""
+        relation_icons = dict(relation_options)
 
-        member_name = ft.TextField(
+        selected = {"id": None, "name": name_val}
+
+        name_field = ft.TextField(
             label="اسم فرد الأسرة",
-            width=340,
+            width=230,
+            value=name_val,
             filled=True,
             bgcolor="#121212",
             color="#FFFFFF",
             label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD),
             border_color="#FFFFFF",
             border_radius=12,
-            value=name_val,
+            prefix_icon=ft.Icons.PERSON_SEARCH,
+        )
+
+        suggestions = ft.Column(
+            spacing=2,
+            visible=False,
+            scroll=ft.ScrollMode.AUTO,
         )
 
         relation_icon = ft.Icon(
-            icon_map.get(selected_relation, ft.Icons.PERSON),
-            size=26,
+            relation_icons.get(rel_val, ft.Icons.FAMILY_RESTROOM),
+            size=24,
             color="#9CCBFF",
         )
 
         relation = ft.Dropdown(
             label="صلة القرابة",
-            width=280,
-            value=selected_relation if selected_relation else None,
+            width=160,
+            value=rel_val if rel_val in relation_icons else None,
             filled=True,
             bgcolor="#121212",
             color="#FFFFFF",
             label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD),
             border_color="#FFFFFF",
             border_radius=12,
-            options=[ft.dropdown.Option(name) for name, _ in relation_options],
+            options=[
+                ft.DropdownOption(key=key, text=key)
+                for key, _ in relation_options
+            ],
         )
 
+        def choose_person(person):
+            selected["id"] = person["id"]
+            selected["name"] = person["name"]
+            name_field.value = person["name"]
+            suggestions.visible = False
+            page.update()
+
+        def refresh_suggestions(e=None):
+            query = (name_field.value or "").strip()
+            suggestions.controls.clear()
+
+            if len(query) < 1:
+                suggestions.visible = False
+                page.update()
+                return
+
+            matches = get_confessors(query)
+
+            if matches:
+                for person in matches[:8]:
+                    person_id = person["id"]
+                    person_name = person["name"]
+
+                    suggestions.controls.append(
+                        ft.Container(
+                            padding=ft.Padding(10, 7, 10, 7),
+                            border_radius=10,
+                            bgcolor="#222222",
+                            border=ft.Border.all(1, "#FFFFFF55"),
+                            ink=True,
+                            on_click=lambda e, p={"id": person_id, "name": person_name}: choose_person(p),
+                            content=ft.Row(
+                                spacing=8,
+                                controls=[
+                                    ft.Icon(ft.Icons.PERSON, size=20, color="#9CCBFF"),
+                                    ft.Text(
+                                        person_name,
+                                        size=15,
+                                        weight=ft.FontWeight.BOLD,
+                                        color="#FFFFFF",
+                                        expand=True,
+                                    ),
+                                ],
+                            ),
+                        )
+                    )
+                suggestions.visible = True
+            else:
+                suggestions.visible = False
+
+            page.update()
+
+        name_field.on_change = refresh_suggestions
+
         def relation_changed(e):
-            relation_icon.icon = icon_map.get(relation.value or "", ft.Icons.PERSON)
+            relation_icon.icon = relation_icons.get(
+                relation.value or "",
+                ft.Icons.FAMILY_RESTROOM,
+            )
             page.update()
 
         relation.on_change = relation_changed
 
-        item_ref = {"name_field": member_name, "rel_field": relation}
+        item_ref = {
+            "name_field": name_field,
+            "rel_field": relation,
+            "person_id": selected,
+        }
         family_inputs.append(item_ref)
 
         def delete_member(e):
@@ -647,32 +719,34 @@ def main(page: ft.Page):
             page.update()
 
         member_container = ft.Container(
-            width=350,
+            width=380,
             padding=10,
-            border_radius=14,
+            border_radius=16,
             bgcolor="#121212",
             border=ft.Border.all(1, "#FFFFFF"),
             content=ft.Column(
-                spacing=8,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=7,
                 controls=[
                     ft.Row(
+                        spacing=7,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=8,
                         controls=[
                             relation_icon,
-                            ft.Text("فرد الأسرة", size=15, weight=ft.FontWeight.BOLD, color="#FFFFFF"),
-                            ft.Container(expand=True),
+                            name_field,
+                            relation,
                             ft.IconButton(
                                 icon=ft.Icons.DELETE_OUTLINE,
                                 icon_color="#FFFFFF",
-                                tooltip="حذف فرد الأسرة",
+                                tooltip="حذف فرد",
                                 on_click=delete_member,
                             ),
                         ],
                     ),
-                    member_name,
-                    relation,
+                    ft.Container(
+                        margin=ft.Margin(0, -2, 0, 0),
+                        padding=ft.Padding(4, 0, 4, 4),
+                        content=suggestions,
+                    ),
                 ],
             ),
         )
@@ -760,14 +834,22 @@ def main(page: ft.Page):
         photo_button = ft.Button("إضافة صورة", icon=ft.Icons.CAMERA_ALT_OUTLINED, on_click=pick_photo_click)
         photo_area = ft.Column(horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10, controls=[photo_placeholder, photo_preview, photo_button])
 
-        family_switch = ft.Switch(label="لديه أسرة", value=bool(edit_data["has_family"]) if edit_data else False)
+        family_switch = ft.Switch(
+            label="لديه أسرة",
+            value=bool(edit_data["has_family"]) if edit_data else False,
+        )
         family_column = ft.Column(
             spacing=8,
             visible=family_switch.value,
-            scroll=ft.ScrollMode.AUTO,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            scroll=ft.ScrollMode.AUTO,
         )
-        add_family_button = ft.Button("إضافة فرد للأسرة", icon=ft.Icons.PERSON_ADD_ALT_1, visible=family_switch.value, on_click=lambda e: add_family_member_ui(family_column))
+        add_family_button = ft.Button(
+            "إضافة فرد للأسرة",
+            icon=ft.Icons.PERSON_ADD_ALT_1,
+            visible=family_switch.value,
+            on_click=lambda e: add_family_member_ui(family_column),
+        )
 
         def family_changed(e):
             family_column.visible = family_switch.value
@@ -775,7 +857,27 @@ def main(page: ft.Page):
             page.update()
 
         family_switch.on_change = family_changed
-        family_section = ft.Container(width=380, padding=15, border_radius=18, bgcolor="#121212", border=ft.Border.all(1.5, "#FFFFFF"), content=ft.Column(spacing=10, controls=[family_switch, family_column, add_family_button]))
+        family_section = ft.Container(
+            width=380,
+            padding=15,
+            border_radius=18,
+            bgcolor="#121212",
+            border=ft.Border.all(1.5, "#FFFFFF"),
+            content=ft.Column(
+                spacing=10,
+                controls=[
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        controls=[
+                            ft.Icon(ft.Icons.FAMILY_RESTROOM, size=24, color="#9CCBFF"),
+                            family_switch,
+                        ],
+                    ),
+                    family_column,
+                    add_family_button,
+                ],
+            ),
+        )
 
         if edit_data and edit_data["has_family"]:
             try:
@@ -797,7 +899,11 @@ def main(page: ft.Page):
                     m_name = (item["name_field"].value or "").strip()
                     m_rel = (item["rel_field"].value or "").strip()
                     if m_name:
-                        parsed_family.append({"name": m_name, "relation": m_rel})
+                        member_data = {"name": m_name, "relation": m_rel}
+                        person_ref = item.get("person_id", {})
+                        if person_ref.get("id") is not None:
+                            member_data["person_id"] = person_ref["id"]
+                        parsed_family.append(member_data)
 
             save_confessor(
                 name=name,
@@ -914,27 +1020,7 @@ def main(page: ft.Page):
                             border=ft.Border.all(1, "#FFFFFF"),
                             content=ft.Row(
                                 controls=[
-                                    ft.Icon(
-                                        {
-                                            "زوج": ft.Icons.FAVORITE,
-                                            "زوجة": ft.Icons.FAVORITE_BORDER,
-                                            "ابن": ft.Icons.CHILD_CARE,
-                                            "ابنة": ft.Icons.CHILD_CARE,
-                                            "أب": ft.Icons.ELDERLY,
-                                            "أم": ft.Icons.ELDERLY,
-                                            "جد": ft.Icons.ELDERLY,
-                                            "جدة": ft.Icons.ELDERLY,
-                                            "أخ": ft.Icons.PERSON,
-                                            "أخت": ft.Icons.PERSON_OUTLINE,
-                                            "حفيد": ft.Icons.CHILD_CARE,
-                                            "حفيدة": ft.Icons.CHILD_CARE,
-                                            "قريب": ft.Icons.GROUP,
-                                            "قريبة": ft.Icons.GROUP,
-                                            "أخرى": ft.Icons.PERSON_OUTLINE,
-                                        }.get(member.get("relation", ""), ft.Icons.PERSON),
-                                        size=25,
-                                        color="#9CCBFF",
-                                    ),
+                                    ft.Icon(ft.Icons.PERSON, size=22, color="#FFFFFF"),
                                     ft.Column(
                                         expand=True, 
                                         spacing=2, 
@@ -1048,7 +1134,7 @@ def main(page: ft.Page):
                                 ft.Text("✣", size=30, color="#E0B45C"),
                                 ft.Text(
                                     "رَاعِي الرُّعَاةِ",
-                                    size=48,
+                                    size=42,
                                     weight=ft.FontWeight.BOLD,
                                     color="#FFE3A0",
                                     text_align=ft.TextAlign.CENTER,
@@ -1060,7 +1146,7 @@ def main(page: ft.Page):
                     ),
                     ft.Text(
                         "كنيسة الشهيد العظيم أبي سيفين والقديسة دميانة",
-                        size=17,
+                        size=15,
                         weight=ft.FontWeight.BOLD,
                         color="#F4E4C1",
                         text_align=ft.TextAlign.CENTER,
