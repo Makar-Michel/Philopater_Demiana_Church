@@ -2,15 +2,10 @@ import asyncio
 import json
 import os
 import sqlite3
+from openpyxl import Workbook, load_workbook
 import shutil
-import base64
-import csv
-import io
-import re
-import zipfile
-import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
-from decimal import Decimal, InvalidOperation
+import subprocess
+from datetime import datetime
 import flet as ft
 
 # =========================================================
@@ -27,51 +22,27 @@ for folder in [ASSETS_DIR, UPLOADS_DIR, BACKUPS_DIR]:
     if not os.path.exists(folder):
         os.makedirs(folder)
 
-def get_icon_path():
-    for icon_name in ("icon.ico", "icon.png"):
-        icon_path = os.path.join(ASSETS_DIR, icon_name)
-        if os.path.exists(icon_path):
-            return icon_path
-    return ""
-
-def make_upload_photo_name(source_name=""):
-    ext = os.path.splitext(source_name or "")[1].lower()
-    if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"):
-        ext = ".jpg"
-    return f"confessor_{os.urandom(4).hex()}{ext}"
-
-def file_to_base64(file_path):
-    if not file_path or not os.path.exists(file_path):
-        return ""
-    try:
-        ext = os.path.splitext(file_path)[1].lower().replace(".", "")
-        if ext == "jpg":
-            ext = "jpeg"
-        with open(file_path, "rb") as image_file:
-            encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
-            return f"data:image/{ext};base64,{encoded_string}"
-    except Exception as e:
-        print(f"Error encoding image: {e}")
-        return ""
-
-def resolve_image_path(filename):
+def resolve_asset(filename):
+    """دالة ذكية للتحقق من مسار الصورة سواء في assets أو uploads أو كمسار مطلق"""
     if not filename:
         return ""
-
     name_only = os.path.basename(filename)
-    candidates = [
-        os.path.join(UPLOADS_DIR, name_only),
-        os.path.join(ASSETS_DIR, name_only),
-        os.path.join(ASSETS_DIR, "people", name_only),
-        os.path.join(BASE_DIR, filename),
-        os.path.join(BASE_DIR, name_only),
-        filename,
-    ]
+    
+    # 1. فحص مجلد assets المحلي بالمحرك المطلق
+    local_asset = os.path.join(ASSETS_DIR, name_only)
+    if os.path.exists(local_asset):
+        return local_asset
+        
+    # 2. فحص مجلد uploads المحلي بالمحرك المطلق
+    upload_path = os.path.join(UPLOADS_DIR, name_only)
+    if os.path.exists(upload_path):
+        return upload_path
 
-    for path in candidates:
-        if os.path.exists(path):
-            return file_to_base64(path)
-    return ""
+    # 3. لو تم إرسال مسار مطلق مسبقاً
+    if os.path.exists(filename):
+        return filename
+
+    return name_only
 
 # =========================================================
 # DATABASE & BACKUP LOGIC
@@ -116,7 +87,7 @@ def auto_backup():
 def save_confessor(name, birth_date, phone, address, last_confession, has_family, family_members, notes, photo, confessor_id=None):
     conn = get_db()
     family_json = json.dumps(family_members, ensure_ascii=False)
-    clean_photo_name = os.path.basename(photo) if photo else ""
+    clean_photo_path = os.path.basename(photo) if photo else ""
     
     if confessor_id:
         conn.execute(
@@ -125,7 +96,7 @@ def save_confessor(name, birth_date, phone, address, last_confession, has_family
             SET name=?, birth_date=?, phone=?, address=?, last_confession=?, has_family=?, family_json=?, notes=?, photo=?
             WHERE id=?
             """,
-            (name, birth_date, phone, address, last_confession, 1 if has_family else 0, family_json, notes, clean_photo_name, confessor_id)
+            (name, birth_date, phone, address, last_confession, 1 if has_family else 0, family_json, notes, clean_photo_path, confessor_id)
         )
     else:
         conn.execute(
@@ -133,7 +104,7 @@ def save_confessor(name, birth_date, phone, address, last_confession, has_family
             INSERT INTO confessors (name, birth_date, phone, address, last_confession, has_family, family_json, notes, photo)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (name, birth_date, phone, address, last_confession, 1 if has_family else 0, family_json, notes, clean_photo_name)
+            (name, birth_date, phone, address, last_confession, 1 if has_family else 0, family_json, notes, clean_photo_path)
         )
 
     conn.commit()
@@ -163,388 +134,127 @@ def get_confessor(confessor_id):
     conn.close()
     return row
 
-def normalize_header(value):
-    text = str(value or "").strip().lower()
-    replacements = {
-        "أ": "ا",
-        "إ": "ا",
-        "آ": "ا",
-        "ى": "ي",
-        "ؤ": "و",
-        "ئ": "ي",
-        "ة": "ه",
-    }
-    for old, new in replacements.items():
-        text = text.replace(old, new)
-    text = re.sub(r"[\u064b-\u065f\u0670ـ]", "", text)
-    text = re.sub(r"[^0-9a-z\u0600-\u06ff]+", "", text)
-    return text
 
-FIELD_ALIASES = {
-    "name": ["الاسم", "اسم", "اسمالمعترف", "الاسمالكامل", "name", "fullname"],
-    "birth_date": ["تاريخالميلاد", "الميلاد", "السن", "العمر", "birthdate", "dateofbirth", "age"],
-    "phone": ["الهاتف", "رقمالهاتف", "الموبايل", "رقمالموبايل", "التليفون", "رقمالتليفون", "phone", "mobile"],
-    "address": ["العنوان", "عنوان", "address"],
-    "last_confession": ["اخرالاعتراف", "اخراعتراف", "اخرمرهاعترف", "اخرمره", "lastconfession"],
-    "notes": ["ملاحظات", "ملاحظه", "notes", "note"],
-}
+# =========================================================
+# EXCEL SHEET BACKUP / UPLOAD
+# =========================================================
 
-def get_row_value(row, field_name):
-    normalized_row = {normalize_header(k): str(v or "").strip() for k, v in row.items()}
-    for alias in FIELD_ALIASES[field_name]:
-        value = normalized_row.get(normalize_header(alias), "")
-        if value:
-            return value
-    return ""
+SHEET_HEADERS = [
+    "ID", "الاسم", "تاريخ الميلاد", "الهاتف", "العنوان",
+    "آخر اعتراف", "لديه أسرة", "بيانات الأسرة", "ملاحظات", "الصورة"
+]
 
-def clean_excel_value(value):
-    text = str(value or "").strip()
-    if re.fullmatch(r"0\d+", text):
-        return text
-    if re.fullmatch(r"-?\d+(\.\d+)?([eE][+-]?\d+)?", text):
-        try:
-            number = Decimal(text)
-            if number == number.to_integral_value():
-                return format(number.quantize(Decimal(1)), "f")
-        except (InvalidOperation, ValueError):
-            pass
-    if re.fullmatch(r"-?\d+\.0", text):
-        return text[:-2]
-    return text
-
-def excel_serial_to_date(value):
+def backup_sheet():
+    """Export all confessors to an Excel .xlsx file inside backups."""
     try:
-        serial = float(value)
-        if serial <= 0:
-            return clean_excel_value(value)
-        base = datetime(1899, 12, 30)
-        return (base + timedelta(days=serial)).strftime("%d/%m/%Y")
-    except Exception:
-        return clean_excel_value(value)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        path = os.path.join(BACKUPS_DIR, f"backup_sheet_{timestamp}.xlsx")
 
-def read_text_sheet(raw_data):
-    content_str = ""
-    for enc in ["utf-8-sig", "utf-8", "cp1256", "windows-1256", "iso-8859-1"]:
-        try:
-            content_str = raw_data.decode(enc)
-            break
-        except (UnicodeDecodeError, TypeError):
-            continue
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "الاعترافات"
+        ws.append(SHEET_HEADERS)
 
-    if not content_str:
-        raise ValueError("فشل في قراءة ترميز الملف. لو الملف CSV احفظه بترميز UTF-8.")
+        for row in get_confessors():
+            # رقم الهاتف يُكتب كنص وليس رقمًا حتى يحتفظ Excel بالصفر في البداية.
+            phone = str(row["phone"] or "").strip()
 
-    sample = content_str[:2048]
+            ws.append([
+                row["id"],
+                row["name"] or "",
+                row["birth_date"] or "",
+                phone,
+                row["address"] or "",
+                row["last_confession"] or "",
+                "نعم" if row["has_family"] else "لا",
+                row["family_json"] or "",
+                row["notes"] or "",
+                row["photo"] or "",
+            ])
+
+            # العمود D (الهاتف) Text format حتى 012... يظل 012... في Excel.
+            phone_cell = ws.cell(row=ws.max_row, column=4)
+            phone_cell.number_format = "@"
+
+        # تنسيق عمود الهاتف بالكامل كنص، بما فيه الخلايا الفارغة الجديدة.
+        for cell in ws["D"]:
+            cell.number_format = "@"
+
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+
+        widths = [8, 28, 16, 18, 32, 18, 14, 35, 35, 25]
+        for idx, width in enumerate(widths, 1):
+            ws.column_dimensions[chr(64 + idx)].width = width
+
+        wb.save(path)
+        return path
+    except Exception as e:
+        print(f"Excel backup error: {e}")
+        return None
+
+
+def upload_sheet(path):
+    """Import rows from an Excel sheet into the confessors table."""
     try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
-        delimiter = dialect.delimiter
-    except Exception:
-        first_line = content_str.splitlines()[0] if content_str.splitlines() else ""
-        delimiter = "\t" if "\t" in first_line else (";" if ";" in first_line and "," not in first_line else ",")
+        wb = load_workbook(path, read_only=True, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        wb.close()
 
-    reader = csv.DictReader(io.StringIO(content_str), delimiter=delimiter)
-    return [{str(k).strip(): clean_excel_value(v) for k, v in row.items() if k} for row in reader]
+        if not rows:
+            return 0, "الشيت فارغ"
 
-def xml_namespace(root):
-    if root.tag.startswith("{"):
-        return {"x": root.tag[1:].split("}")[0]}
-    return {}
+        header = [str(x).strip() if x is not None else "" for x in rows[0]]
+        header_map = {name: i for i, name in enumerate(header)}
 
-def get_xlsx_shared_strings(zip_file):
-    if "xl/sharedStrings.xml" not in zip_file.namelist():
-        return []
-    root = ET.fromstring(zip_file.read("xl/sharedStrings.xml"))
-    ns = xml_namespace(root)
-    strings = []
-    for item in root.findall(".//x:si", ns):
-        parts = []
-        for text_node in item.findall(".//x:t", ns):
-            parts.append(text_node.text or "")
-        strings.append("".join(parts))
-    return strings
+        def value(row, *names):
+            for name in names:
+                if name in header_map:
+                    i = header_map[name]
+                    return row[i] if i < len(row) else ""
+            return ""
 
-def get_xlsx_date_styles(zip_file):
-    if "xl/styles.xml" not in zip_file.namelist():
-        return set()
+        imported = 0
+        conn = get_db()
 
-    root = ET.fromstring(zip_file.read("xl/styles.xml"))
-    ns = xml_namespace(root)
-    custom_date_ids = set()
-    standard_date_ids = {14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 30, 36, 45, 46, 47, 50, 57}
-
-    for num_fmt in root.findall(".//x:numFmt", ns):
-        fmt_id = int(num_fmt.attrib.get("numFmtId", "0"))
-        fmt_code = num_fmt.attrib.get("formatCode", "").lower()
-        if any(ch in fmt_code for ch in ["d", "m", "y", "h", "s"]):
-            custom_date_ids.add(fmt_id)
-
-    date_styles = set()
-    cell_xfs = root.find(".//x:cellXfs", ns)
-    if cell_xfs is not None:
-        for index, xf in enumerate(cell_xfs.findall("x:xf", ns)):
-            fmt_id = int(xf.attrib.get("numFmtId", "0"))
-            if fmt_id in standard_date_ids or fmt_id in custom_date_ids:
-                date_styles.add(index)
-    return date_styles
-
-def get_first_xlsx_sheet_path(zip_file):
-    names = set(zip_file.namelist())
-    if "xl/workbook.xml" not in names:
-        return "xl/worksheets/sheet1.xml"
-
-    workbook = ET.fromstring(zip_file.read("xl/workbook.xml"))
-    ns = xml_namespace(workbook)
-    rel_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-    first_sheet = workbook.find(".//x:sheet", ns)
-    if first_sheet is None:
-        return "xl/worksheets/sheet1.xml"
-
-    rel_id = first_sheet.attrib.get(f"{{{rel_ns}}}id")
-    if not rel_id or "xl/_rels/workbook.xml.rels" not in names:
-        return "xl/worksheets/sheet1.xml"
-
-    rels = ET.fromstring(zip_file.read("xl/_rels/workbook.xml.rels"))
-    for rel in rels:
-        if rel.attrib.get("Id") == rel_id:
-            target = rel.attrib.get("Target", "worksheets/sheet1.xml")
-            if target.startswith("/"):
-                return target.lstrip("/")
-            return "xl/" + target.lstrip("/")
-    return "xl/worksheets/sheet1.xml"
-
-def column_index_from_ref(cell_ref):
-    letters = "".join(ch for ch in cell_ref if ch.isalpha())
-    index = 0
-    for ch in letters:
-        index = index * 26 + (ord(ch.upper()) - ord("A") + 1)
-    return max(index - 1, 0)
-
-def read_xlsx_sheet(raw_data):
-    with zipfile.ZipFile(io.BytesIO(raw_data)) as zip_file:
-        sheet_path = get_first_xlsx_sheet_path(zip_file)
-        if sheet_path not in zip_file.namelist():
-            raise ValueError("لم أجد أول شيت داخل ملف Excel.")
-
-        shared_strings = get_xlsx_shared_strings(zip_file)
-        date_styles = get_xlsx_date_styles(zip_file)
-        sheet = ET.fromstring(zip_file.read(sheet_path))
-        ns = xml_namespace(sheet)
-        table_rows = []
-
-        for row_node in sheet.findall(".//x:sheetData/x:row", ns):
-            values = []
-            for cell in row_node.findall("x:c", ns):
-                col_index = column_index_from_ref(cell.attrib.get("r", "A1"))
-                while len(values) <= col_index:
-                    values.append("")
-
-                cell_type = cell.attrib.get("t", "")
-                style_index = int(cell.attrib.get("s", "0") or "0")
-                value_node = cell.find("x:v", ns)
-
-                if cell_type == "s" and value_node is not None:
-                    idx = int(value_node.text or "0")
-                    value = shared_strings[idx] if idx < len(shared_strings) else ""
-                elif cell_type == "inlineStr":
-                    value = "".join(t.text or "" for t in cell.findall(".//x:t", ns))
-                elif value_node is not None:
-                    value = value_node.text or ""
-                    if style_index in date_styles:
-                        value = excel_serial_to_date(value)
-                    else:
-                        value = clean_excel_value(value)
-                else:
-                    value = ""
-
-                values[col_index] = value
-
-            if any(str(v).strip() for v in values):
-                table_rows.append(values)
-
-    if not table_rows:
-        return []
-
-    headers = [str(v).strip() for v in table_rows[0]]
-    records = []
-    for values in table_rows[1:]:
-        record = {}
-        for idx, header in enumerate(headers):
-            if header:
-                record[header] = clean_excel_value(values[idx] if idx < len(values) else "")
-        records.append(record)
-    return records
-
-def insert_sheet_rows_to_db(rows):
-    count = 0
-    skipped_duplicates = 0
-    conn = get_db()
-    try:
-        for row in rows:
-            name = get_row_value(row, "name")
+        for row in rows[1:]:
+            name = str(value(row, "الاسم", "Name") or "").strip()
             if not name:
                 continue
 
-            birth_date = get_row_value(row, "birth_date")
-            phone = get_row_value(row, "phone")
-            address = get_row_value(row, "address")
-            last_confession = get_row_value(row, "last_confession")
-            notes = get_row_value(row, "notes")
-
-            if phone:
-                duplicate = conn.execute(
-                    "SELECT id FROM confessors WHERE name = ? AND phone = ? LIMIT 1",
-                    (name, phone),
-                ).fetchone()
-                if duplicate:
-                    skipped_duplicates += 1
-                    continue
+            birth_date = str(value(row, "تاريخ الميلاد", "Birth Date") or "")
+            phone = str(value(row, "الهاتف", "Phone") or "")
+            address = str(value(row, "العنوان", "Address") or "")
+            last_confession = str(value(row, "آخر اعتراف", "Last Confession") or "")
+            has_family_raw = str(value(row, "لديه أسرة", "Has Family") or "").strip().lower()
+            has_family = 1 if has_family_raw in ("نعم", "yes", "1", "true") else 0
+            family_json = str(value(row, "بيانات الأسرة", "Family") or "")
+            notes = str(value(row, "ملاحظات", "Notes") or "")
+            photo = os.path.basename(str(value(row, "الصورة", "Photo") or ""))
 
             conn.execute(
                 """
-                INSERT INTO confessors (name, birth_date, phone, address, last_confession, has_family, family_json, notes, photo)
-                VALUES (?, ?, ?, ?, ?, 0, '[]', ?, '')
+                INSERT INTO confessors
+                (name, birth_date, phone, address, last_confession,
+                 has_family, family_json, notes, photo)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (name, birth_date, phone, address, last_confession, notes),
+                (
+                    name, birth_date, phone, address, last_confession,
+                    has_family, family_json, notes, photo
+                )
             )
-            count += 1
+            imported += 1
 
         conn.commit()
-    finally:
         conn.close()
-
-    if count:
         auto_backup()
-    return count, skipped_duplicates
+        return imported, None
 
-def import_sheet_to_db(file_stream_or_path, file_name=""):
-    """استيراد CSV/TSV/XLSX إلى جدول المعترفين."""
-    try:
-        if isinstance(file_stream_or_path, bytes):
-            raw_data = file_stream_or_path
-        elif isinstance(file_stream_or_path, str) and os.path.exists(file_stream_or_path):
-            with open(file_stream_or_path, "rb") as f:
-                raw_data = f.read()
-            if not file_name:
-                file_name = os.path.basename(file_stream_or_path)
-        else:
-            return False, "تعذر الوصول للملف أو قراءة بياناته"
-
-        ext = os.path.splitext(file_name or "")[1].lower()
-        is_xlsx = ext == ".xlsx" or raw_data[:2] == b"PK"
-        rows = read_xlsx_sheet(raw_data) if is_xlsx else read_text_sheet(raw_data)
-
-        if not rows:
-            return False, "الشيت فارغ أو لا يحتوي على صفوف بيانات"
-
-        count, skipped = insert_sheet_rows_to_db(rows)
-        if count == 0:
-            return False, "لم أجد عمود الاسم. خلي أول صف يحتوي على: الاسم، رقم الهاتف، العنوان، تاريخ الميلاد، آخر اعتراف، ملاحظات"
-
-        extra = f" وتم تجاهل {skipped} مكرر" if skipped else ""
-        return True, f"تم استيراد {count} معترف بنجاح{extra}!"
-    except zipfile.BadZipFile:
-        return False, "ملف Excel غير صالح. اختر ملف .xlsx أو احفظ الشيت CSV."
     except Exception as e:
-        return False, f"خطأ أثناء الاستيراد: {str(e)}"
-
-def excel_column_name(index):
-    name = ""
-    while index:
-        index, remainder = divmod(index - 1, 26)
-        name = chr(65 + remainder) + name
-    return name
-
-def xml_escape(value):
-    text = str(value or "")
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
-
-def xlsx_inline_cell(row_index, col_index, value):
-    cell_ref = f"{excel_column_name(col_index)}{row_index}"
-    safe_value = xml_escape(value)
-    return f'<c r="{cell_ref}" t="inlineStr"><is><t>{safe_value}</t></is></c>'
-
-def build_confessors_xlsx_bytes():
-    rows = get_confessors("")
-    headers = ["الاسم", "تاريخ الميلاد", "رقم الهاتف", "العنوان", "آخر اعتراف", "لديه أسرة", "أفراد الأسرة", "ملاحظات", "الصورة"]
-    sheet_rows = []
-    sheet_rows.append(headers)
-
-    for row in rows:
-        try:
-            family_members = json.loads(row["family_json"] or "[]")
-        except Exception:
-            family_members = []
-        family_text = "؛ ".join(
-            f"{member.get('name', '')} ({member.get('relation', '')})".strip()
-            for member in family_members
-            if member.get("name")
-        )
-        sheet_rows.append([
-            row["name"] or "",
-            row["birth_date"] or "",
-            row["phone"] or "",
-            row["address"] or "",
-            row["last_confession"] or "",
-            "نعم" if row["has_family"] else "لا",
-            family_text,
-            row["notes"] or "",
-            row["photo"] or "",
-        ])
-
-    worksheet_rows = []
-    for row_index, values in enumerate(sheet_rows, start=1):
-        cells = "".join(xlsx_inline_cell(row_index, col_index, value) for col_index, value in enumerate(values, start=1))
-        worksheet_rows.append(f'<row r="{row_index}">{cells}</row>')
-
-    sheet_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-<sheetViews><sheetView rightToLeft="1" workbookViewId="0"/></sheetViews>
-<cols>
-<col min="1" max="1" width="28" customWidth="1"/>
-<col min="2" max="5" width="18" customWidth="1"/>
-<col min="6" max="6" width="12" customWidth="1"/>
-<col min="7" max="8" width="35" customWidth="1"/>
-<col min="9" max="9" width="24" customWidth="1"/>
-</cols>
-<sheetData>{''.join(worksheet_rows)}</sheetData>
-</worksheet>'''
-
-    workbook_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-<sheets><sheet name="المعترفين" sheetId="1" r:id="rId1"/></sheets>
-</workbook>'''
-
-    workbook_rels = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-</Relationships>'''
-
-    root_rels = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-</Relationships>'''
-
-    content_types = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-<Default Extension="xml" ContentType="application/xml"/>
-<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-</Types>'''
-
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        zip_file.writestr("[Content_Types].xml", content_types)
-        zip_file.writestr("_rels/.rels", root_rels)
-        zip_file.writestr("xl/workbook.xml", workbook_xml)
-        zip_file.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
-        zip_file.writestr("xl/worksheets/sheet1.xml", sheet_xml)
-    return output.getvalue(), len(rows)
+        print(f"Excel upload error: {e}")
+        return 0, str(e)
 
 # =========================================================
 # MAIN APPLICATION
@@ -553,19 +263,18 @@ def build_confessors_xlsx_bytes():
 def main(page: ft.Page):
     init_db()
 
-    page.title = "راعي الرعاة"
+    page.title = "رَاعِي الرُّعَاةِ"
     page.padding = 0
     page.spacing = 0
     page.bgcolor = "#000000"
     page.rtl = True
     page.assets_dir = ASSETS_DIR
-    
-    icon_path = get_icon_path()
-    if icon_path:
-        try:
-            page.window.icon = icon_path
-        except Exception as ex:
-            print(f"Window icon error: {ex}")
+
+    file_picker = ft.FilePicker()
+    page.services.append(file_picker)
+
+    sheet_picker = ft.FilePicker()
+    page.services.append(sheet_picker)
 
     current_photo = {"value": ""}
     family_inputs = []
@@ -577,11 +286,13 @@ def main(page: ft.Page):
         page.update()
 
     def church_background(content):
+        # استخدام المسار المطلق المباشر لمنع أي شاشة سوداء
+        bg_path = os.path.join(ASSETS_DIR, "church_main.webp")
         return ft.Stack(
             expand=True,
             controls=[
                 ft.Image(
-                    src="church_main.webp",
+                    src=bg_path,
                     width=float("inf"),
                     height=float("inf"),
                     fit=ft.BoxFit.COVER,
@@ -591,92 +302,86 @@ def main(page: ft.Page):
             ],
         )
 
-    excel_export_picker = ft.FilePicker()
-    page.services.append(excel_export_picker)
-
-    async def export_excel_backup_action(e):
+    def export_backup_action(e):
         try:
-            excel_bytes, row_count = build_confessors_xlsx_bytes()
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            backup_name = f"confessors_backup_{timestamp}.xlsx"
-            local_backup_path = os.path.join(BACKUPS_DIR, backup_name)
-
-            with open(local_backup_path, "wb") as backup_file:
-                backup_file.write(excel_bytes)
-
-            saved_path = await excel_export_picker.save_file(
-                dialog_title="احفظ ملف Excel",
-                file_name=backup_name,
-                file_type=ft.FilePickerFileType.CUSTOM,
-                allowed_extensions=["xlsx"],
-                src_bytes=excel_bytes,
-            )
-
-            if saved_path:
-                show_snack(f"تم تصدير {row_count} معترف إلى Excel:\n{backup_name}")
+            b_path = auto_backup()
+            if b_path and os.path.exists(b_path):
+                show_snack(f"تم حفظ النسخة بنجاح:\n{os.path.basename(b_path)}")
             else:
-                show_snack(f"تم حفظ ملف Excel في backups:\n{backup_name}")
+                show_snack("فشل إنشاء النسخة الاحتياطية")
         except Exception as ex:
             show_snack(f"خطأ: {ex}")
 
-    last_import_key = {"value": ""}
-
-    def import_selected_sheet_file(selected_file):
+    def export_sheet_action(e):
         try:
-            file_bytes = getattr(selected_file, "bytes", None)
-            file_path = getattr(selected_file, "path", None)
-            file_name = getattr(selected_file, "name", None) or os.path.basename(file_path or "")
-            file_key = f"{file_name}:{getattr(selected_file, 'size', '')}:{file_path or ''}"
-            if file_key == last_import_key["value"]:
-                return
-            last_import_key["value"] = file_key
-
-            if file_bytes:
-                success, msg = import_sheet_to_db(file_bytes, file_name)
-            elif file_path and os.path.exists(file_path):
-                success, msg = import_sheet_to_db(file_path, file_name)
+            path = backup_sheet()
+            if path and os.path.exists(path):
+                show_snack(f"تم حفظ الشيت بنجاح:\n{os.path.basename(path)}")
             else:
-                show_snack("تعذر قراءة بيانات الملف المختار")
-                return
-
-            show_snack(msg)
-            if success:
-                show_confessions()
+                show_snack("فشل إنشاء Backup Sheet")
         except Exception as ex:
-            show_snack(f"خطأ غير متوقع: {ex}")
+            show_snack(f"خطأ في Backup Sheet: {ex}")
 
-    def on_excel_picked(e: ft.FilePickerResultEvent):
-        if e.files and len(e.files) > 0:
-            import_selected_sheet_file(e.files[0])
-        else:
-            show_snack("تم إلغاء اختيار الملف")
+    def on_sheet_result(e):
+        try:
+            if e.files and len(e.files) > 0:
+                selected = e.files[0]
+                if selected.path:
+                    imported, err = upload_sheet(selected.path)
+                    if err:
+                        show_snack(f"خطأ في Upload Sheet: {err}")
+                    else:
+                        show_snack(f"تم رفع الشيت بنجاح — تمت إضافة {imported} سجل")
+                        show_home()
+        except Exception as ex:
+            show_snack(f"خطأ في Upload Sheet: {ex}")
 
-    excel_picker = ft.FilePicker(on_result=on_excel_picked)
-    page.services.append(excel_picker)
+    sheet_picker.on_result = on_sheet_result
 
-    async def import_excel_click(e):
-        selected_files = await excel_picker.pick_files(
+    async def upload_sheet_click(e):
+        await sheet_picker.pick_files(
             allow_multiple=False,
-            dialog_title="اختر ملف الشيت",
-            file_type=ft.FilePickerFileType.CUSTOM,
-            allowed_extensions=["xlsx", "csv", "tsv"],
-            with_data=True,
+            dialog_title="اختر ملف Excel",
         )
-        if selected_files and len(selected_files) > 0:
-            import_selected_sheet_file(selected_files[0])
 
     def show_home(e=None):
         page.controls.clear()
 
-        logo_image = ft.Image(
-            src="icon.png",
-            width=80,
-            height=80,
-            fit=ft.BoxFit.CONTAIN
+        title = ft.Container(
+            padding=ft.Padding(18, 8, 18, 8),
+            border_radius=24,
+            bgcolor="#3B2416DD",
+            border=ft.Border.all(1.5, "#D6A64A"),
+            shadow=ft.BoxShadow(
+                blur_radius=16,
+                spread_radius=1,
+                offset=ft.Offset(0, 3),
+            ),
+            content=ft.Row(
+                alignment=ft.MainAxisAlignment.CENTER,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=13,
+                controls=[
+                    ft.Text("✣", size=26, color="#E0B45C"),
+                    ft.Text(
+                        "رَاعِي الرُّعَاةِ",
+                        size=42,
+                        weight=ft.FontWeight.BOLD,
+                        color="#FFE3A0",
+                        text_align=ft.TextAlign.CENTER,
+                        font_family="Amiri",
+                    ),
+                    ft.Text("✣", size=26, color="#E0B45C"),
+                ],
+            ),
         )
-
-        title = ft.Text("تطبيق راعي الرعاة", size=26, weight=ft.FontWeight.BOLD, color="#FFFFFF", text_align=ft.TextAlign.CENTER)
-        subtitle = ft.Text("كنيسة الشهيد العظيم أبي سيفين والقديسة دميانة", size=15, weight=ft.FontWeight.BOLD, color="#EEEEEE", text_align=ft.TextAlign.CENTER)
+        subtitle = ft.Text(
+            "كنيسة الشهيد العظيم أبي سيفين والقديسة دميانة",
+            size=16,
+            weight=ft.FontWeight.BOLD,
+            color="#F4E4C1",
+            text_align=ft.TextAlign.CENTER,
+        )
 
         confession_card = ft.Container(
             width=340,
@@ -691,12 +396,18 @@ def main(page: ft.Page):
                 spacing=12,
                 controls=[
                     ft.Container(
-                        width=55,
-                        height=55,
-                        border_radius=28,
-                        bgcolor="#FFFFFF20",
+                        width=120,
+                        height=120,
+                        border_radius=24,
+                        bgcolor="#3A2215",
                         alignment=ft.Alignment(0, 0),
-                        content=ft.Text("✝", size=28, color="#FFFFFF", weight=ft.FontWeight.BOLD),
+                        ink=True,
+                        content=ft.Image(
+                            src="cross_button_complete_v2.png",
+                            width=120,
+                            height=120,
+                            fit=ft.BoxFit.CONTAIN,
+                        ),
                     ),
                     ft.Text("الاعترافات", size=22, weight=ft.FontWeight.BOLD, color="#FFFFFF"),
                     ft.Text("إدارة بيانات المعترفين", size=13, weight=ft.FontWeight.BOLD, color="#DDDDDD"),
@@ -704,11 +415,18 @@ def main(page: ft.Page):
             ),
         )
 
-        backup_btn = ft.Button("Backup Sheet", icon=ft.Icons.DOWNLOAD, on_click=export_excel_backup_action)
-        excel_btn = ft.Button("Upload Sheet", icon=ft.Icons.TABLE_CHART, on_click=import_excel_click)
-
+        upload_sheet_btn = ft.Button(
+            "Upload Sheet",
+            icon=ft.Icons.UPLOAD_FILE,
+            on_click=upload_sheet_click,
+        )
+        backup_sheet_btn = ft.Button(
+            "Backup Sheet",
+            icon=ft.Icons.DOWNLOAD,
+            on_click=export_sheet_action,
+        )
         main_card = ft.Container(
-            width=480,
+            width=450,
             padding=25,
             border_radius=28,
             bgcolor="#121212EE",
@@ -717,12 +435,16 @@ def main(page: ft.Page):
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=16,
                 controls=[
-                    logo_image,
                     title, 
                     subtitle, 
                     ft.Container(height=5), 
                     confession_card,
-                    ft.Row(alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=8, controls=[backup_btn, excel_btn])
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        wrap=True,
+                        spacing=8,
+                        controls=[upload_sheet_btn, backup_sheet_btn],
+                    ),
                 ],
             ),
         )
@@ -743,7 +465,8 @@ def main(page: ft.Page):
             bgcolor="#121212",
             color="#FFFFFF",
             label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD),
-            border=ft.OutlineInputBorder(border_radius=14, side=ft.BorderSide(color="#FFFFFF")),
+            border_color="#FFFFFF",
+            border_radius=14,
             value=search_value,
         )
 
@@ -771,17 +494,17 @@ def main(page: ft.Page):
                 )
             else:
                 for row in rows:
-                    photo_b64 = resolve_image_path(row["photo"])
-                    if photo_b64:
-                        image_control = ft.Image(src=photo_b64, width=58, height=58, fit=ft.BoxFit.COVER, border_radius=29)
+                    photo_src = resolve_asset(row["photo"])
+                    if photo_src:
+                        image_control = ft.Image(src=photo_src, width=58, height=58, fit=ft.BoxFit.COVER, border_radius=29)
                     else:
                         image_control = ft.Container(
                             width=58,
                             height=58,
                             border_radius=29,
-                            bgcolor="#FFFFFF20",
+                            bgcolor="#FFFFFF",  # خلفية بيضاء
                             alignment=ft.Alignment(0, 0),
-                            content=ft.Icon(ft.Icons.PERSON, size=28, color="#FFFFFF"),
+                            content=ft.Icon(ft.Icons.PERSON, size=28, color="#000000"),
                         )
 
                     family_text = "لديه أسرة" if row["has_family"] else "بدون أسرة"
@@ -862,7 +585,8 @@ def main(page: ft.Page):
             bgcolor="#121212", 
             color="#FFFFFF", 
             label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), 
-            border=ft.OutlineInputBorder(border_radius=12, side=ft.BorderSide(color="#FFFFFF")), 
+            border_color="#FFFFFF", 
+            border_radius=12, 
             value=name_val
         )
         relation = ft.TextField(
@@ -872,7 +596,8 @@ def main(page: ft.Page):
             bgcolor="#121212", 
             color="#FFFFFF", 
             label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD), 
-            border=ft.OutlineInputBorder(border_radius=12, side=ft.BorderSide(color="#FFFFFF")), 
+            border_color="#FFFFFF", 
+            border_radius=12, 
             value=rel_val
         )
 
@@ -917,7 +642,8 @@ def main(page: ft.Page):
                 color="#FFFFFF",
                 hint_style=ft.TextStyle(color="#AAAAAA"),
                 label_style=ft.TextStyle(color="#FFFFFF", weight=ft.FontWeight.BOLD),
-                border=ft.OutlineInputBorder(border_radius=14, side=ft.BorderSide(color="#FFFFFF")),
+                border_color="#FFFFFF",
+                border_radius=14,
                 value=value
             )
 
@@ -928,67 +654,49 @@ def main(page: ft.Page):
         last_confession_field = create_styled_textfield("آخر مرة اعترف إمتى؟", hint="01/09/2026", value=edit_data["last_confession"] if edit_data else "")
         notes_field = create_styled_textfield("ملاحظات", multiline=True, min_lines=3, max_lines=6, value=edit_data["notes"] if edit_data else "")
 
-        initial_photo_b64 = resolve_image_path(current_photo["value"])
-        
         photo_preview = ft.Image(
-            src=initial_photo_b64 if initial_photo_b64 else "", 
+            src=resolve_asset(current_photo["value"]), 
             width=120, 
             height=120, 
             fit=ft.BoxFit.COVER, 
             border_radius=60, 
-            visible=bool(initial_photo_b64)
+            visible=bool(current_photo["value"])
         )
         photo_placeholder = ft.Container(
             width=120, 
             height=120, 
             border_radius=60, 
-            bgcolor="#121212", 
+            bgcolor="#FFFFFF",  # خلفية بيضاء
             border=ft.Border.all(2, "#FFFFFF"), 
             alignment=ft.Alignment(0, 0), 
-            visible=not bool(initial_photo_b64), 
-            content=ft.Icon(ft.Icons.PERSON, size=48, color="#FFFFFF")
+            visible=not bool(current_photo["value"]), 
+            content=ft.Icon(ft.Icons.PERSON, size=48, color="#000000")
         )
 
-        def save_picked_photo(selected_file):
-            file_path = getattr(selected_file, "path", None)
-            file_name = getattr(selected_file, "name", None) or os.path.basename(file_path or "photo.jpg")
-
-            try:
-                target_name = make_upload_photo_name(file_name)
-                target_path = os.path.join(UPLOADS_DIR, target_name)
-                file_bytes = getattr(selected_file, "bytes", None)
-
-                if file_bytes:
-                    with open(target_path, "wb") as image_file:
-                        image_file.write(file_bytes)
-                elif file_path and os.path.exists(file_path):
-                    shutil.copy2(file_path, target_path)
-                else:
-                    show_snack("لم يتم قراءة الصورة بشكل صحيح")
-                    return
-
-                current_photo["value"] = target_name
-                photo_preview.src = file_to_base64(target_path)
-                photo_preview.visible = True
-                photo_placeholder.visible = False
-                page.update()
-                show_snack("تم اختيار الصورة بنجاح!")
-            except Exception as ex:
-                show_snack(f"خطأ في حفظ الصورة: {ex}")
-
-        def on_photo_picked(e: ft.FilePickerResultEvent):
-            if e.files and len(e.files) > 0:
-                save_picked_photo(e.files[0])
-
-        photo_picker = ft.FilePicker(on_result=on_photo_picked)
+        photo_picker = ft.FilePicker()
         page.services.append(photo_picker)
 
+        def on_photo_picked(e):
+            try:
+                if e.files and len(e.files) > 0:
+                    selected_file = e.files[0]
+                    target_name = f"confessor_{os.urandom(4).hex()}.jpg"
+                    target_path = os.path.join(UPLOADS_DIR, target_name)
+
+                    if selected_file.path and os.path.exists(selected_file.path):
+                        shutil.copy2(selected_file.path, target_path)
+                    current_photo["value"] = target_path
+                    photo_preview.src = resolve_asset(target_path)
+                    photo_preview.visible = True
+                    photo_placeholder.visible = False
+                    page.update()
+            except Exception as ex:
+                show_snack(f"خطأ حفظ الصورة: {ex}")
+
+        photo_picker.on_result = on_photo_picked
+
         async def pick_photo_click(e):
-            await photo_picker.pick_files(
-                allow_multiple=False, 
-                file_type=ft.FilePickerFileType.IMAGE,
-                with_data=True,
-            )
+            await photo_picker.pick_files(allow_multiple=False, file_type=ft.FilePickerFileType.IMAGE)
 
         photo_button = ft.Button("إضافة صورة", icon=ft.Icons.CAMERA_ALT_OUTLINED, on_click=pick_photo_click)
         photo_area = ft.Column(horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10, controls=[photo_placeholder, photo_preview, photo_button])
@@ -1090,18 +798,18 @@ def main(page: ft.Page):
 
         page.controls.clear()
 
-        photo_b64 = resolve_image_path(row["photo"])
-        if photo_b64:
-            profile_image = ft.Image(src=photo_b64, width=140, height=140, fit=ft.BoxFit.COVER, border_radius=70)
+        photo_src = resolve_asset(row["photo"])
+        if photo_src:
+            profile_image = ft.Image(src=photo_src, width=140, height=140, fit=ft.BoxFit.COVER, border_radius=70)
         else:
             profile_image = ft.Container(
                 width=140, 
                 height=140, 
                 border_radius=70, 
-                bgcolor="#121212", 
+                bgcolor="#FFFFFF",  # خلفية بيضاء
                 border=ft.Border.all(2, "#FFFFFF"),
                 alignment=ft.Alignment(0, 0), 
-                content=ft.Icon(ft.Icons.PERSON, size=60, color="#FFFFFF")
+                content=ft.Icon(ft.Icons.PERSON, size=60, color="#000000")
             )
 
         def info_row(icon, title, value):
@@ -1238,9 +946,41 @@ def main(page: ft.Page):
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=15,
                 controls=[
-                    ft.Text("✝", size=60, color="#FFFFFF", weight=ft.FontWeight.BOLD),
-                    ft.Text("راعي الرعاة", size=32, weight=ft.FontWeight.BOLD, color="#FFFFFF", text_align=ft.TextAlign.CENTER),
-                    ft.Text("كنيسة الشهيد العظيم أبي سيفين والقديسة دميانة", size=16, weight=ft.FontWeight.BOLD, color="#DDDDDD", text_align=ft.TextAlign.CENTER),
+                    ft.Container(
+                        padding=ft.Padding(20, 10, 20, 10),
+                        border_radius=25,
+                        bgcolor="#3B2416E8",
+                        border=ft.Border.all(1.7, "#D6A64A"),
+                        shadow=ft.BoxShadow(
+                            blur_radius=20,
+                            spread_radius=1,
+                            offset=ft.Offset(0, 4),
+                        ),
+                        content=ft.Row(
+                            alignment=ft.MainAxisAlignment.CENTER,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=15,
+                            controls=[
+                                ft.Text("✣", size=30, color="#E0B45C"),
+                                ft.Text(
+                                    "رَاعِي الرُّعَاةِ",
+                                    size=48,
+                                    weight=ft.FontWeight.BOLD,
+                                    color="#FFE3A0",
+                                    text_align=ft.TextAlign.CENTER,
+                                    font_family="Amiri",
+                                ),
+                                ft.Text("✣", size=30, color="#E0B45C"),
+                            ],
+                        ),
+                    ),
+                    ft.Text(
+                        "كنيسة الشهيد العظيم أبي سيفين والقديسة دميانة",
+                        size=17,
+                        weight=ft.FontWeight.BOLD,
+                        color="#F4E4C1",
+                        text_align=ft.TextAlign.CENTER,
+                    ),
                 ],
             )
         )
@@ -1259,20 +999,50 @@ def main(page: ft.Page):
         animated_text.offset = ft.Offset(0, 0)
         page.update()
 
+        # افتتاحية صوتية: "رَاعِي الرُّعَاةِ"
+        
         await asyncio.sleep(3)
 
         page.controls.clear()
+
+        # =====================================================
+        # شاشة صورة أبونا - تحميل مباشر من الملف
+        # يدعم JPG / JPEG / PNG حتى لو تغير امتداد الصورة
+        # =====================================================
+
+        priest_candidates = [
+            os.path.join(ASSETS_DIR, "church_priest.jpg"),
+            os.path.join(ASSETS_DIR, "church_priest.jpeg"),
+            os.path.join(ASSETS_DIR, "church_priest.png"),
+        ]
+
+        priest_path = next((p for p in priest_candidates if os.path.isfile(p)), None)
+
+        if priest_path:
+            priest_image = ft.Image(
+                src=priest_path,
+                fit=ft.BoxFit.CONTAIN,
+                expand=True,
+            )
+        else:
+            print("Priest image not found in assets folder.")
+            priest_image = ft.Container(
+                expand=True,
+                alignment=ft.Alignment(0, 0),
+                content=ft.Text(
+                    "صورة أبونا غير موجودة داخل مجلد assets",
+                    size=20,
+                    weight=ft.FontWeight.BOLD,
+                    color="#FFFFFF",
+                    text_align=ft.TextAlign.CENTER,
+                ),
+            )
 
         priest_screen = ft.Container(
             expand=True,
             bgcolor="#000000",
             alignment=ft.Alignment(0, 0),
-            content=ft.Image(
-                src="church_priest.png",
-                fit=ft.BoxFit.CONTAIN,
-                width=float("inf"),
-                height=float("inf"),
-            )
+            content=priest_image,
         )
 
         page.add(priest_screen)
@@ -1284,4 +1054,4 @@ def main(page: ft.Page):
 
     page.run_task(intro)
 
-ft.run(main, assets_dir=ASSETS_DIR, upload_dir=UPLOADS_DIR)
+ft.run(main)
